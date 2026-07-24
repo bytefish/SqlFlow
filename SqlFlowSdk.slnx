@@ -10,6 +10,7 @@
     <File Path="../README.md" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/SqlFlowSdk.Monitoring.AspNetCore/SqlFlowSdk.Monitoring.AspNetCore.csproj" />
     <Project Path="src/SqlFlowSdk.Monitoring.Postgres/SqlFlowSdk.Monitoring.Postgres.csproj" />
     <Project Path="src/SqlFlowSdk.Monitoring.SqlServer/SqlFlowSdk.Monitoring.SqlServer.csproj" />
     <Project Path="src/SqlFlowSdk.Monitoring/SqlFlowSdk.Monitoring.csproj" />
