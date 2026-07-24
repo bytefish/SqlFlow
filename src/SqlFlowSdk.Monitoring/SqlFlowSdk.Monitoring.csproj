@@ -6,12 +6,4 @@
 		<Nullable>enable</Nullable>
 	</PropertyGroup>
 
-	<ItemGroup>
-		<PackageReference Include="Npgsql" />
-	</ItemGroup>
-
-	<ItemGroup>
-	  <ProjectReference Include="..\SqlFlowSdk\SqlFlowSdk.csproj" />
-	</ItemGroup>
-
 </Project>

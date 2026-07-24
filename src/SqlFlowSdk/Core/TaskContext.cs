@@ -1,6 +1,5 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using SqlFlowSdk.Database;
 using SqlFlowSdk.Exceptions;

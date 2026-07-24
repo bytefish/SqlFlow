@@ -7,11 +7,11 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Npgsql" />
+		<PackageReference Include="Microsoft.Data.SqlClient" />
+		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
 	</ItemGroup>
 
 	<ItemGroup>
-	  <ProjectReference Include="..\SqlFlowSdk\SqlFlowSdk.csproj" />
+	  <ProjectReference Include="..\SqlFlowSdk.Monitoring\SqlFlowSdk.Monitoring.csproj" />
 	</ItemGroup>
-
 </Project>
