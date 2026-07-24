@@ -45,7 +45,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
     }
 
-    public async Task<IEnumerable<QueueStatItem>> GetQueueStatsAsync(CancellationToken ct = default)
+    public async Task<List<QueueStatItem>> GetQueueStatsAsync(CancellationToken ct = default)
     {
         List<QueueStatItem> stats = [];
 
@@ -73,7 +73,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return stats;
     }
 
-    public async Task<IEnumerable<ThroughputBucketItem>> GetThroughputHistoryAsync(TimeSpan window, CancellationToken ct = default)
+    public async Task<List<ThroughputBucketItem>> GetThroughputHistoryAsync(TimeSpan window, CancellationToken ct = default)
     {
         List<ThroughputBucketItem> result = [];
 
@@ -108,7 +108,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return result;
     }
 
-    public async Task<IEnumerable<TaskPercentileItem>> GetTaskLatencyPercentilesAsync(string? queueName = null, CancellationToken ct = default)
+    public async Task<List<TaskPercentileItem>> GetTaskLatencyPercentilesAsync(string? queueName = null, CancellationToken ct = default)
     {
         List<TaskPercentileItem> result = [];
         string sql = @"
@@ -173,7 +173,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return new DatabaseHealthItem("SQL Server", queueName, 0, 0, 0);
     }
 
-    public async Task<IEnumerable<ActiveWorkerItem>> GetActiveWorkersAsync(CancellationToken ct = default)
+    public async Task<List<ActiveWorkerItem>> GetActiveWorkersAsync(CancellationToken ct = default)
     {
         List<ActiveWorkerItem> result = [];
 
@@ -197,7 +197,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return result;
     }
 
-    public async Task<IEnumerable<QueueWaitTimeItem>> GetQueueWaitTimesAsync(CancellationToken ct = default)
+    public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(CancellationToken ct = default)
     {
         List<QueueWaitTimeItem> result = [];
 
@@ -221,7 +221,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return result;
     }
 
-    public async Task<IEnumerable<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(TimeSpan? lookbackWindow = null, CancellationToken ct = default)
+    public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(TimeSpan? lookbackWindow = null, CancellationToken ct = default)
     {
         List<TaskFailureHotspotItem> hotspots = [];
 
@@ -251,7 +251,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return hotspots;
     }
 
-    public async Task<IEnumerable<ActiveWaitItem>> GetActiveWaitsAsync(CancellationToken ct = default)
+    public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(CancellationToken ct = default)
     {
         List<ActiveWaitItem> waits = [];
 
@@ -275,7 +275,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return waits;
     }
 
-    public async Task<IEnumerable<QueueBacklogItem>> GetQueueBacklogDepthAsync(CancellationToken ct = default)
+    public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(CancellationToken ct = default)
     {
         List<QueueBacklogItem> backlog = [];
 
@@ -299,7 +299,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return backlog;
     }
 
-    public async Task<IEnumerable<RetryHotspotItem>> GetRetryHotspotsAsync(CancellationToken ct = default)
+    public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(CancellationToken ct = default)
     {
         List<RetryHotspotItem> hotspots = [];
 
@@ -323,7 +323,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return hotspots;
     }
 
-    public async Task<IEnumerable<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(CancellationToken ct = default)
+    public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(CancellationToken ct = default)
     {
         List<UpcomingWakeupBucketItem> wakeups = [];
 
@@ -346,7 +346,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return wakeups;
     }
 
-    public async Task<IEnumerable<SlowTaskItem>> GetSlowestTasksAsync(CancellationToken ct = default)
+    public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(CancellationToken ct = default)
     {
         List<SlowTaskItem> slowTasks = [];
 
@@ -370,7 +370,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return slowTasks;
     }
 
-    public async Task<IEnumerable<FailedTaskItem>> GetFailedTasksAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<FailedTaskItem>> GetFailedTasksAsync(int limit = 50, CancellationToken ct = default)
     {
         List<FailedTaskItem> tasks = [];
 
@@ -420,7 +420,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return null;
     }
 
-    public async Task<IEnumerable<TaskSearchResultItem>> SearchTasksAsync(TaskSearchFilter filter, CancellationToken ct = default)
+    public async Task<List<TaskSearchResultItem>> SearchTasksAsync(TaskSearchFilter filter, CancellationToken ct = default)
     {
         List<TaskSearchResultItem> items = [];
 

@@ -119,7 +119,7 @@ public interface ISqlFlowDashboard
     /// <param name="limit">Number of tasks to return, defaults to 50.</param>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns>The list of failed tasks in the system</returns>
-    Task<IEnumerable<FailedTaskItem>> GetFailedTasksAsync(int limit = 50, CancellationToken ct = default);
+    Task<List<FailedTaskItem>> GetFailedTasksAsync(int limit = 50, CancellationToken ct = default);
 
     /// <summary>
     /// Gets a list of the most recent completed tasks in the SQL Flow system, providing information about which tasks have completed successfully, 

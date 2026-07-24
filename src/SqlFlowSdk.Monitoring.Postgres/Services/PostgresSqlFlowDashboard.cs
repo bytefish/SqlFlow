@@ -31,7 +31,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return reader.GetString(ordinal); // Postgres JSONB kommt als String zurück
         }
 
-        public async Task<IEnumerable<QueueStatItem>> GetQueueStatsAsync(CancellationToken ct = default)
+        public async Task<List<QueueStatItem>> GetQueueStatsAsync(CancellationToken ct = default)
         {
             List<QueueStatItem> stats = [];
 
@@ -58,7 +58,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return stats;
         }
 
-        public async Task<IEnumerable<ThroughputBucketItem>> GetThroughputHistoryAsync(TimeSpan window, CancellationToken ct = default)
+        public async Task<List<ThroughputBucketItem>> GetThroughputHistoryAsync(TimeSpan window, CancellationToken ct = default)
         {
             List<ThroughputBucketItem> result = [];
             string sql = @"
@@ -93,7 +93,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return result;
         }
 
-        public async Task<IEnumerable<TaskPercentileItem>> GetTaskLatencyPercentilesAsync(string? queueName = null, CancellationToken ct = default)
+        public async Task<List<TaskPercentileItem>> GetTaskLatencyPercentilesAsync(string? queueName = null, CancellationToken ct = default)
         {
             List<TaskPercentileItem> result = [];
             string sql = @"
@@ -151,7 +151,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return new DatabaseHealthItem("PostgreSQL", queueName, 0, 0, 0);
         }
 
-        public async Task<IEnumerable<ActiveWorkerItem>> GetActiveWorkersAsync(CancellationToken ct = default)
+        public async Task<List<ActiveWorkerItem>> GetActiveWorkersAsync(CancellationToken ct = default)
         {
             List<ActiveWorkerItem> result = [];
 
@@ -175,7 +175,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return result;
         }
 
-        public async Task<IEnumerable<QueueWaitTimeItem>> GetQueueWaitTimesAsync(CancellationToken ct = default)
+        public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(CancellationToken ct = default)
         {
             List<QueueWaitTimeItem> result = [];
 
@@ -199,7 +199,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return result;
         }
 
-        public async Task<IEnumerable<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(TimeSpan? lookbackWindow = null, CancellationToken ct = default)
+        public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(TimeSpan? lookbackWindow = null, CancellationToken ct = default)
         {
             List<TaskFailureHotspotItem> hotspots = [];
             
@@ -229,7 +229,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return hotspots;
         }
 
-        public async Task<IEnumerable<ActiveWaitItem>> GetActiveWaitsAsync(CancellationToken ct = default)
+        public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(CancellationToken ct = default)
         {
             List<ActiveWaitItem> waits = [];
             
@@ -252,7 +252,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return waits;
         }
 
-        public async Task<IEnumerable<QueueBacklogItem>> GetQueueBacklogDepthAsync(CancellationToken ct = default)
+        public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(CancellationToken ct = default)
         {
             List<QueueBacklogItem> backlog = [];
 
@@ -276,7 +276,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return backlog;
         }
 
-        public async Task<IEnumerable<RetryHotspotItem>> GetRetryHotspotsAsync(CancellationToken ct = default)
+        public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(CancellationToken ct = default)
         {
             List<RetryHotspotItem> hotspots = [];
             
@@ -300,7 +300,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return hotspots;
         }
 
-        public async Task<IEnumerable<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(CancellationToken ct = default)
+        public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(CancellationToken ct = default)
         {
             List<UpcomingWakeupBucketItem> wakeups = [];
 
@@ -324,7 +324,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return wakeups;
         }
 
-        public async Task<IEnumerable<SlowTaskItem>> GetSlowestTasksAsync(CancellationToken ct = default)
+        public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(CancellationToken ct = default)
         {
             List<SlowTaskItem> slowTasks = [];
             
@@ -347,7 +347,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return slowTasks;
         }
 
-        public async Task<IEnumerable<FailedTaskItem>> GetFailedTasksAsync(int limit = 50, CancellationToken ct = default)
+        public async Task<List<FailedTaskItem>> GetFailedTasksAsync(int limit = 50, CancellationToken ct = default)
         {
             List<FailedTaskItem> tasks = [];
             
@@ -397,7 +397,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return null;
         }
 
-        public async Task<IEnumerable<TaskSearchResultItem>> SearchTasksAsync(TaskSearchFilter filter, CancellationToken ct = default)
+        public async Task<List<TaskSearchResultItem>> SearchTasksAsync(TaskSearchFilter filter, CancellationToken ct = default)
         {
             List<TaskSearchResultItem> items = [];
             
