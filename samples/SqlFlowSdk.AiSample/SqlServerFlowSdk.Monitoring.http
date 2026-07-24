@@ -53,7 +53,7 @@ GET {{baseUrl}}/failed-tasks?limit=20
 Accept: application/json
 
 ### Analyze individual task details
-GET {{baseUrl}}/tasks/orders/550e8400-e29b-41d4-a716-446655440000
+GET {{baseUrl}}/tasks/ai-agent-queue/550e8400-e29b-41d4-a716-446655440000
 Accept: application/json
 
 ### Flexible task search (Full-text, status, JSON filter, pagination)
