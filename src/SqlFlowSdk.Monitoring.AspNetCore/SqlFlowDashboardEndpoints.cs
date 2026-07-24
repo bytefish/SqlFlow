@@ -13,11 +13,11 @@ namespace SqlFlowSdk.Monitoring.AspNetCore;
 public static class SqlFlowDashboardEndpoints
 {
     /// <summary>
-    /// Maps all SqlFlow Dashboard endpoints under a configurable route prefix (default: /api/SqlFlow).
+    /// Maps all SqlFlow Dashboard endpoints under a configurable route prefix (default: /api/sqlflow-dashboard).
     /// </summary>
     public static IEndpointRouteBuilder MapSqlFlowDashboardEndpoints(
         this IEndpointRouteBuilder routes,
-        string routePrefix = "/api/SqlFlow")
+        string routePrefix = "/api/sqlflow-dashboard")
     {
         var group = routes.MapGroup(routePrefix)
                           .WithTags("SqlFlow Dashboard");

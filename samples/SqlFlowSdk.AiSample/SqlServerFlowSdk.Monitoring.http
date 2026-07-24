@@ -1,0 +1,68 @@
+@baseUrl = http://localhost:5000/api/sqlflow-dashboard
+
+### Fetch queue statistics (System overview)
+GET {{baseUrl}}/stats
+Accept: application/json
+
+### Throughput history (Last 1 hour)
+GET {{baseUrl}}/throughput?windowSeconds=3600
+Accept: application/json
+
+### Latencies & percentiles (p50, p95, p99) for a specific queue
+GET {{baseUrl}}/latency-percentiles?queueName=ai-agent-queue
+Accept: application/json
+
+### Database health (Storage usage & locks)
+GET {{baseUrl}}/health?queueName=ai-agent-queue
+Accept: application/json
+
+### Active worker nodes and current utilization
+GET {{baseUrl}}/workers
+Accept: application/json
+
+### Queueing latency (Wait time prior to first start)
+GET {{baseUrl}}/wait-times
+Accept: application/json
+
+### Failure hotspots (Most failure-prone task types in the last 24 hours)
+GET {{baseUrl}}/hotspots/failures?lookbackSeconds=86400
+Accept: application/json
+
+### Active event blockades (What sleeping tasks are waiting on)
+GET {{baseUrl}}/active-waits
+Accept: application/json
+
+### Backlog depth and age of oldest untreated task
+GET {{baseUrl}}/backlog
+Accept: application/json
+
+### Retry hotspots (Tasks stuck in retry loops)
+GET {{baseUrl}}/hotspots/retries
+Accept: application/json
+
+### Auto-scaling forecast (Upcoming wakeups in the next few hours)
+GET {{baseUrl}}/upcoming-wakeups
+Accept: application/json
+
+### Performance bottlenecks (Slowest completed tasks)
+GET {{baseUrl}}/slow-tasks
+Accept: application/json
+
+### List failed tasks
+GET {{baseUrl}}/failed-tasks?limit=20
+Accept: application/json
+
+### Analyze individual task details
+GET {{baseUrl}}/tasks/orders/550e8400-e29b-41d4-a716-446655440000
+Accept: application/json
+
+### Flexible task search (Full-text, status, JSON filter, pagination)
+POST {{baseUrl}}/tasks/search
+Content-Type: application/json
+{
+  "queueName": "ai-agent-queue",
+  "sortBy": "enqueue_at",
+  "sortDescending": true,
+  "offset": 0,
+  "limit": 25
+}
