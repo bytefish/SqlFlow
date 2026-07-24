@@ -1,10 +1,10 @@
 # SqlFlow.NET #
 
-SqlFlow is a simple durable execution workflow system, which is entirely based on SQL Server and nothing else. It handles scheduling and retries, and it does all of that without needing any other services to run in addition to SQL Server.
+SqlFlow is a simple durable execution workflow system, for PostgreSQL and SQL Server. It handles scheduling and retries, without needing any other services to run in addition to PostgreSQL or SQL Server.
 
 The SQL Script for creating the SqlFlow Database Schema is available here:
 
-* [https://github.com/bytefish/SqlFlow/blob/main/sql/ssf.sql](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf.sql)
+* [https://github.com/bytefish/SqlFlow/blob/main/sql/](https://github.com/bytefish/SqlFlow/blob/main/sql)
 
 ## 1. Setup ##
 
