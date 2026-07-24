@@ -1,5 +1,7 @@
 ﻿using Npgsql;
+using NpgsqlTypes;
 using SqlFlowSdk.Monitoring.Models;
+using System.Data;
 using System.Data.Common;
 
 namespace SqlFlowSdk.Monitoring.Postgres.Services
@@ -17,6 +19,15 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             DbParameter p = cmd.CreateParameter();
             p.ParameterName = name;
+            p.Value = value ?? DBNull.Value;
+            cmd.Parameters.Add(p);
+        }
+
+        private void AddParam(NpgsqlCommand cmd, string name, NpgsqlDbType dbType, object? value)
+        {
+            NpgsqlParameter p = cmd.CreateParameter();
+            p.ParameterName = name;
+            p.NpgsqlDbType = dbType;
             p.Value = value ?? DBNull.Value;
             cmd.Parameters.Add(p);
         }
@@ -114,9 +125,10 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
 
             cmd.CommandText = sql;
 
-            AddParam(cmd, "@queue", queueName);
+            AddParam(cmd, "@queue", NpgsqlDbType.Text, queueName);
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 result.Add(new TaskPercentileItem(
@@ -175,11 +187,20 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return result;
         }
 
-        public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(CancellationToken ct = default)
+        public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(int limit = 50, CancellationToken ct = default)
         {
             List<QueueWaitTimeItem> result = [];
 
-            string sql = "SELECT queue_name, COALESCE(AVG(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS avg_wait_ms, COALESCE(MAX(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS max_wait_ms FROM ssf.tasks WHERE first_started_at IS NOT NULL AND enqueue_at >= NOW() - INTERVAL '7 days' GROUP BY queue_name";
+            string sql = @"
+                SELECT queue_name, 
+                       COALESCE(AVG(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS avg_wait_ms, 
+                       COALESCE(MAX(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS max_wait_ms 
+                FROM 
+                    ssf.tasks 
+                WHERE 
+                    first_started_at IS NOT NULL AND enqueue_at >= NOW() - INTERVAL '7 days' 
+                GROUP BY queue_name
+                LIMIT @limit";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -188,6 +209,8 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             await using NpgsqlCommand cmd = conn.CreateCommand();
 
             cmd.CommandText = sql;
+
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, limit);
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
@@ -199,13 +222,24 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return result;
         }
 
-        public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(TimeSpan? lookbackWindow = null, CancellationToken ct = default)
+        public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(int limit = 50, TimeSpan? lookbackWindow = null, CancellationToken ct = default)
         {
             List<TaskFailureHotspotItem> hotspots = [];
             
             string timeFilter = lookbackWindow.HasValue ? "AND r.failed_at >= NOW() - (@window_seconds || ' seconds')::INTERVAL" : "";
             
-            string sql = $"SELECT t.queue_name, t.task_name, COUNT(*)::int as failure_count, MAX(r.failed_at) FROM ssf.runs r JOIN ssf.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} GROUP BY t.queue_name, t.task_name ORDER BY failure_count DESC LIMIT 50";
+            string sql = @$"
+                SELECT 
+                    t.queue_name, 
+                    t.task_name, 
+                    COUNT(*)::int as failure_count, 
+                    MAX(r.failed_at) 
+                FROM 
+                    ssf.runs r 
+                        JOIN ssf.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} 
+                GROUP BY t.queue_name, t.task_name 
+                ORDER BY failure_count DESC 
+                LIMIT @limit";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -215,12 +249,15 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             
             cmd.CommandText = sql;
 
+            AddParam(cmd, "@limit", limit);
+
             if (lookbackWindow.HasValue)
             {
                 AddParam(cmd, "@window_seconds", (int)lookbackWindow.Value.TotalSeconds);
             }
-
+            
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 hotspots.Add(new TaskFailureHotspotItem(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetFieldValue<DateTimeOffset>(3)));
@@ -229,11 +266,20 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return hotspots;
         }
 
-        public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(CancellationToken ct = default)
+        public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(int limit = 50, CancellationToken ct = default)
         {
             List<ActiveWaitItem> waits = [];
             
-            string sql = "SELECT queue_name, event_name, COUNT(*)::int as waiting_count, MIN(created_at) FROM ssf.waits GROUP BY queue_name, event_name ORDER BY waiting_count DESC";
+            string sql = @"
+                SELECT 
+                    queue_name, 
+                    event_name, 
+                    COUNT(*)::int as waiting_count, 
+                    MIN(created_at) 
+                FROM ssf.waits 
+                GROUP BY queue_name, event_name 
+                ORDER BY waiting_count DESC
+                LIMIT @limit";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -243,7 +289,10 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             
             cmd.CommandText = sql;
 
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, limit);
+
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 waits.Add(new ActiveWaitItem(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3)));
@@ -252,11 +301,23 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return waits;
         }
 
-        public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(CancellationToken ct = default)
+        public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(int limit = 50, CancellationToken ct = default)
         {
             List<QueueBacklogItem> backlog = [];
 
-            string sql = "SELECT queue_name, COUNT(*)::int as pending_count, MIN(enqueue_at) FROM ssf.tasks WHERE state = 'pending' GROUP BY queue_name ORDER BY pending_count DESC";
+            string sql = @"
+                SELECT 
+                    queue_name, 
+                    COUNT(*)::int as pending_count, 
+                    MIN(enqueue_at) 
+                FROM 
+                    ssf.tasks 
+                WHERE 
+                    state = 'pending' 
+                GROUP BY 
+                    queue_name 
+                ORDER BY pending_count DESC
+                LIMIT @limit";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -265,6 +326,8 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             await using NpgsqlCommand cmd = conn.CreateCommand();
 
             cmd.CommandText = sql;
+
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, limit);
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
@@ -276,11 +339,23 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return backlog;
         }
 
-        public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(CancellationToken ct = default)
+        public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(int limit = 50, CancellationToken ct = default)
         {
             List<RetryHotspotItem> hotspots = [];
             
-            string sql = "SELECT queue_name, task_id::text, task_name, attempts, state FROM ssf.tasks WHERE attempts > 1 AND state IN ('pending', 'sleeping') ORDER BY attempts DESC LIMIT 50";
+            string sql = @"
+                SELECT 
+                    queue_name, 
+                    task_id::text, 
+                    task_name, 
+                    attempts, 
+                    state 
+                FROM 
+                    ssf.tasks 
+                WHERE 
+                    attempts > 1 AND state IN ('pending', 'sleeping') 
+                ORDER BY attempts DESC 
+                LIMIT @limit";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -289,6 +364,9 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             await using NpgsqlCommand cmd = conn.CreateCommand();
             
             cmd.CommandText = sql;
+
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, limit);
+
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             
@@ -300,11 +378,11 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return hotspots;
         }
 
-        public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(CancellationToken ct = default)
+        public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(int limit = 50, CancellationToken ct = default)
         {
             List<UpcomingWakeupBucketItem> wakeups = [];
 
-            string sql = "SELECT date_trunc('hour', r.available_at) AS time_bucket, r.queue_name, COUNT(*)::int AS sleeping_count FROM ssf.runs r WHERE r.state = 'sleeping' AND r.available_at > NOW() GROUP BY 1, 2 ORDER BY 1 ASC LIMIT 50";
+            string sql = "SELECT date_trunc('hour', r.available_at) AS time_bucket, r.queue_name, COUNT(*)::int AS sleeping_count FROM ssf.runs r WHERE r.state = 'sleeping' AND r.available_at > NOW() GROUP BY 1, 2 ORDER BY 1 ASC LIMIT @limit";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -313,6 +391,8 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             await using NpgsqlCommand cmd = conn.CreateCommand();
             
             cmd.CommandText = sql;
+
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, limit);
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             
@@ -324,11 +404,21 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             return wakeups;
         }
 
-        public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(CancellationToken ct = default)
+        public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(int limit, CancellationToken ct = default)
         {
             List<SlowTaskItem> slowTasks = [];
             
-            string sql = "SELECT t.queue_name, t.task_id::text, t.task_name, EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000 AS duration_ms, r.completed_at FROM ssf.runs r JOIN ssf.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'completed' AND r.completed_at >= NOW() - INTERVAL '24 hours' ORDER BY duration_ms DESC LIMIT 50";
+            string sql = @"
+                SELECT 
+                    t.queue_name, 
+                    t.task_id::text, 
+                    t.task_name, 
+                    EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000 AS duration_ms, 
+                    r.completed_at 
+               FROM ssf.runs r 
+                    JOIN ssf.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id 
+               WHERE r.state = 'completed' AND r.completed_at >= NOW() - INTERVAL '24 hours' 
+              ORDER BY duration_ms DESC LIMIT 50";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -339,6 +429,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             cmd.CommandText = sql;
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 slowTasks.Add(new SlowTaskItem(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), reader.GetFieldValue<DateTimeOffset>(4)));
@@ -360,7 +451,8 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             await using NpgsqlCommand cmd = conn.CreateCommand();
             
             cmd.CommandText = sql;
-            AddParam(cmd, "@limit", limit);
+
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, limit);
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             
@@ -374,7 +466,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
 
         public async Task<TaskDetailItem?> GetTaskDetailsAsync(string queueName, string taskId, CancellationToken ct = default)
         {
-            string sql = "SELECT task_name, state, enqueue_at, first_started_at, completed_payload, params::text FROM ssf.tasks WHERE queue_name = @queue AND task_id = @task_id";
+            string sql = "SELECT task_name, state, enqueue_at, first_started_at, completed_payload, params::text FROM ssf.tasks WHERE queue_name = @queue AND task_id = @task_id  LIMIT @limit OFFSET @offset";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -384,8 +476,10 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             
             cmd.CommandText = sql;
             
-            AddParam(cmd, "@queue", queueName);
-            AddParam(cmd, "@task_id", Guid.Parse(taskId));
+            AddParam(cmd, "@queue", NpgsqlDbType.Text, queueName);
+            AddParam(cmd, "@task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, 1);
+            AddParam(cmd, "@offset", NpgsqlDbType.Integer, 0);
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             
@@ -425,16 +519,16 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             
             cmd.CommandText = sql;
 
-            AddParam(cmd, "@queue", filter.QueueName);
-            AddParam(cmd, "@states", filter.States?.ToArray());
-            AddParam(cmd, "@min_att", filter.MinAttempts);
-            AddParam(cmd, "@max_att", filter.MaxAttempts);
-            AddParam(cmd, "@claimed_by", filter.ClaimedBy);
+            AddParam(cmd, "@queue", NpgsqlDbType.Text, filter.QueueName);
+            AddParam(cmd, "@states", NpgsqlDbType.Array | NpgsqlDbType.Text, filter.States?.ToArray());
+            AddParam(cmd, "@min_att", NpgsqlDbType.Integer, filter.MinAttempts);
+            AddParam(cmd, "@max_att", NpgsqlDbType.Integer, filter.MaxAttempts);
+            AddParam(cmd, "@claimed_by", NpgsqlDbType.Text, filter.ClaimedBy);
             AddParam(cmd, "@search_term", string.IsNullOrWhiteSpace(filter.SearchTerm) ? null : $"%{filter.SearchTerm}%");
-            AddParam(cmd, "@from_date", filter.FromDate);
-            AddParam(cmd, "@to_date", filter.ToDate);
-            AddParam(cmd, "@limit", filter.Limit);
-            AddParam(cmd, "@offset", filter.Offset);
+            AddParam(cmd, "@from_date", NpgsqlDbType.TimestampTz, filter.FromDate);
+            AddParam(cmd, "@to_date", NpgsqlDbType.TimestampTz, filter.ToDate);
+            AddParam(cmd, "@limit", NpgsqlDbType.Integer, filter.Limit);
+            AddParam(cmd, "@offset", NpgsqlDbType.Integer, filter.Offset);
 
             await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             

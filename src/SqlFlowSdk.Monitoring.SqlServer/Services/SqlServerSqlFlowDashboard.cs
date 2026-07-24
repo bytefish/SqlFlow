@@ -197,11 +197,11 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return result;
     }
 
-    public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(CancellationToken ct = default)
+    public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(int limit = 50, CancellationToken ct = default)
     {
         List<QueueWaitTimeItem> result = [];
 
-        string sql = "SELECT queue_name, ISNULL(AVG(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS avg_wait_ms, ISNULL(MAX(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS max_wait_ms FROM ssf.tasks WITH (NOLOCK) WHERE first_started_at IS NOT NULL AND enqueue_at >= DATEADD(day, -7, SYSDATETIMEOFFSET()) GROUP BY queue_name";
+        string sql = "SELECT TOP(@limit) queue_name, ISNULL(AVG(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS avg_wait_ms, ISNULL(MAX(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS max_wait_ms FROM ssf.tasks WITH (NOLOCK) WHERE first_started_at IS NOT NULL AND enqueue_at >= DATEADD(day, -7, SYSDATETIMEOFFSET()) GROUP BY queue_name";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -210,6 +210,8 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+
+        AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
@@ -221,12 +223,12 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return result;
     }
 
-    public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(TimeSpan? lookbackWindow = null, CancellationToken ct = default)
+    public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(int limit = 50, TimeSpan? lookbackWindow = null, CancellationToken ct = default)
     {
         List<TaskFailureHotspotItem> hotspots = [];
 
         string timeFilter = lookbackWindow.HasValue ? "AND r.failed_at >= DATEADD(second, -@window_seconds, SYSDATETIMEOFFSET())" : "";
-        string sql = $"SELECT TOP 50 t.queue_name, t.task_name, COUNT(*) as failure_count, MAX(r.failed_at) FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} GROUP BY t.queue_name, t.task_name ORDER BY failure_count DESC";
+        string sql = $"SELECT TOP(@limit) t.queue_name, t.task_name, COUNT(*) as failure_count, MAX(r.failed_at) FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} GROUP BY t.queue_name, t.task_name ORDER BY failure_count DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -235,6 +237,8 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+
+        AddParam(cmd, "@limit", limit);
 
         if (lookbackWindow.HasValue)
         {
@@ -251,11 +255,11 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return hotspots;
     }
 
-    public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(CancellationToken ct = default)
+    public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(int limit = 50, CancellationToken ct = default)
     {
         List<ActiveWaitItem> waits = [];
 
-        string sql = "SELECT queue_name, event_name, COUNT(*) as waiting_count, MIN(created_at) FROM ssf.waits WITH (NOLOCK) GROUP BY queue_name, event_name ORDER BY waiting_count DESC";
+        string sql = "SELECT TOP(@limit) queue_name, event_name, COUNT(*) as waiting_count, MIN(created_at) FROM ssf.waits WITH (NOLOCK) GROUP BY queue_name, event_name ORDER BY waiting_count DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -264,6 +268,8 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+
+        AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
@@ -275,11 +281,11 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return waits;
     }
 
-    public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(CancellationToken ct = default)
+    public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(int limit = 50, CancellationToken ct = default)
     {
         List<QueueBacklogItem> backlog = [];
 
-        string sql = "SELECT queue_name, COUNT(*) as pending_count, MIN(enqueue_at) FROM ssf.tasks WITH (NOLOCK) WHERE state = 'pending' GROUP BY queue_name ORDER BY pending_count DESC";
+        string sql = "SELECT TOP(@limit) queue_name, COUNT(*) as pending_count, MIN(enqueue_at) FROM ssf.tasks WITH (NOLOCK) WHERE state = 'pending' GROUP BY queue_name ORDER BY pending_count DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -288,6 +294,8 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+
+        AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
@@ -299,11 +307,11 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return backlog;
     }
 
-    public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(CancellationToken ct = default)
+    public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(int limit = 50, CancellationToken ct = default)
     {
         List<RetryHotspotItem> hotspots = [];
 
-        string sql = "SELECT TOP 50 queue_name, CAST(task_id AS NVARCHAR(36)), task_name, attempts, state FROM ssf.tasks WITH (NOLOCK) WHERE attempts > 1 AND state IN ('pending', 'sleeping') ORDER BY attempts DESC";
+        string sql = "SELECT TOP(@limit) queue_name, CAST(task_id AS NVARCHAR(36)), task_name, attempts, state FROM ssf.tasks WITH (NOLOCK) WHERE attempts > 1 AND state IN ('pending', 'sleeping') ORDER BY attempts DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -312,6 +320,8 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+
+        AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
@@ -323,11 +333,11 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return hotspots;
     }
 
-    public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(CancellationToken ct = default)
+    public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(int limit = 50, CancellationToken ct = default)
     {
         List<UpcomingWakeupBucketItem> wakeups = [];
 
-        string sql = "SELECT TOP 50 DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0) AS time_bucket, r.queue_name, COUNT(*) AS sleeping_count FROM ssf.runs r WITH (NOLOCK) WHERE r.state = 'sleeping' AND r.available_at > SYSDATETIMEOFFSET() GROUP BY DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0), r.queue_name ORDER BY time_bucket ASC";
+        string sql = "SELECT TOP(@limit) DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0) AS time_bucket, r.queue_name, COUNT(*) AS sleeping_count FROM ssf.runs r WITH (NOLOCK) WHERE r.state = 'sleeping' AND r.available_at > SYSDATETIMEOFFSET() GROUP BY DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0), r.queue_name ORDER BY time_bucket ASC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -336,6 +346,8 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+
+        AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -346,11 +358,11 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         return wakeups;
     }
 
-    public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(CancellationToken ct = default)
+    public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(int limit = 50, CancellationToken ct = default)
     {
         List<SlowTaskItem> slowTasks = [];
 
-        string sql = "SELECT TOP 50 t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, CAST(DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS FLOAT) AS duration_ms, r.completed_at FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'completed' AND r.completed_at >= DATEADD(day, -1, SYSDATETIMEOFFSET()) ORDER BY duration_ms DESC";
+        string sql = "SELECT TOP(@limit) t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, CAST(DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS FLOAT) AS duration_ms, r.completed_at FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'completed' AND r.completed_at >= DATEADD(day, -1, SYSDATETIMEOFFSET()) ORDER BY duration_ms DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -359,6 +371,8 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+
+        AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 

@@ -50,41 +50,42 @@ public static class SqlFlowDashboardEndpoints
             .WithName("GetActiveWorkers")
             .WithSummary("Active worker nodes and their current utilization");
 
-        group.MapGet("/wait-times", async (ISqlFlowDashboard dashboard, CancellationToken ct) =>
-            Results.Ok(await dashboard.GetQueueWaitTimesAsync(ct)))
+        group.MapGet("/wait-times", async (ISqlFlowDashboard dashboard, int? limit, CancellationToken ct) =>
+            Results.Ok(await dashboard.GetQueueWaitTimesAsync(limit ?? 50, ct)))
             .WithName("GetQueueWaitTimes")
             .WithSummary("Queue wait times prior to first start");
 
-        group.MapGet("/hotspots/failures", async (ISqlFlowDashboard dashboard, int? lookbackSeconds, CancellationToken ct) =>
+        group.MapGet("/hotspots/failures", async (ISqlFlowDashboard dashboard, int? lookbackSeconds, int? limit, CancellationToken ct) =>
         {
             TimeSpan? window = lookbackSeconds.HasValue ? TimeSpan.FromSeconds(lookbackSeconds.Value) : null;
-            return Results.Ok(await dashboard.GetTaskFailureHotspotsAsync(window, ct));
+
+            return Results.Ok(await dashboard.GetTaskFailureHotspotsAsync(limit ?? 50, window, ct));
         })
             .WithName("GetTaskFailureHotspots")
             .WithSummary("Tasks/agents with the highest failure rates");
 
-        group.MapGet("/active-waits", async (ISqlFlowDashboard dashboard, CancellationToken ct) =>
-            Results.Ok(await dashboard.GetActiveWaitsAsync(ct)))
+        group.MapGet("/active-waits", async (ISqlFlowDashboard dashboard, int? limit, CancellationToken ct) =>
+            Results.Ok(await dashboard.GetActiveWaitsAsync(limit ?? 50, ct)))
             .WithName("GetActiveWaits")
             .WithSummary("Blocking events that tasks are currently waiting on");
 
-        group.MapGet("/backlog", async (ISqlFlowDashboard dashboard, CancellationToken ct) =>
-            Results.Ok(await dashboard.GetQueueBacklogDepthAsync(ct)))
+        group.MapGet("/backlog", async (ISqlFlowDashboard dashboard, int? limit, CancellationToken ct) =>
+            Results.Ok(await dashboard.GetQueueBacklogDepthAsync(limit ?? 50, ct)))
             .WithName("GetQueueBacklogDepth")
             .WithSummary("Number of backlog tasks and age of the oldest element");
 
-        group.MapGet("/hotspots/retries", async (ISqlFlowDashboard dashboard, CancellationToken ct) =>
-            Results.Ok(await dashboard.GetRetryHotspotsAsync(ct)))
+        group.MapGet("/hotspots/retries", async (ISqlFlowDashboard dashboard, int? limit, CancellationToken ct) =>
+            Results.Ok(await dashboard.GetRetryHotspotsAsync(limit ?? 50, ct)))
             .WithName("GetRetryHotspots")
             .WithSummary("Tasks with frequent retry attempts (flapping detection)");
 
-        group.MapGet("/upcoming-wakeups", async (ISqlFlowDashboard dashboard, CancellationToken ct) =>
-            Results.Ok(await dashboard.GetUpcomingWakeupsAsync(ct)))
+        group.MapGet("/upcoming-wakeups", async (ISqlFlowDashboard dashboard, int? limit, CancellationToken ct) =>
+            Results.Ok(await dashboard.GetUpcomingWakeupsAsync(limit ?? 50, ct)))
             .WithName("GetUpcomingWakeups")
             .WithSummary("Wake-up forecast for sleeping tasks to support auto-scaling");
 
-        group.MapGet("/slow-tasks", async (ISqlFlowDashboard dashboard, CancellationToken ct) =>
-            Results.Ok(await dashboard.GetSlowestTasksAsync(ct)))
+        group.MapGet("/slow-tasks", async (ISqlFlowDashboard dashboard, int? limit, CancellationToken ct) =>
+            Results.Ok(await dashboard.GetSlowestTasksAsync(limit ?? 50, ct)))
             .WithName("GetSlowestTasks")
             .WithSummary("Slowest successfully completed tasks from the last 24 hours");
 

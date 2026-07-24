@@ -62,7 +62,7 @@ public interface ISqlFlowDashboard
     /// </summary>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns>Wait Times for Tasks being processed</returns>
-    Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(CancellationToken ct = default);
+    Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(int limit = 50, CancellationToken ct = default);
 
     /// <summary>
     /// Gets the Failure hotspots for tasks in the SQL Flow system over a specified lookback window. This includes information 
@@ -71,7 +71,7 @@ public interface ISqlFlowDashboard
     /// <param name="lookbackWindow">Lookback Window to calculate the failures for</param>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns>Failure Hotspot Items to find out why tasks fail</returns>
-    Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(TimeSpan? lookbackWindow = null, CancellationToken ct = default);
+    Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(int limit = 50, TimeSpan? lookbackWindow = null, CancellationToken ct = default);
 
     /// <summary>
     /// Gets the list of currently active waits in the SQL Flow system, providing information about tasks that are waiting for resources or 
@@ -80,7 +80,7 @@ public interface ISqlFlowDashboard
     /// </summary>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns></returns>
-    Task<List<ActiveWaitItem>> GetActiveWaitsAsync(CancellationToken ct = default);
+    Task<List<ActiveWaitItem>> GetActiveWaitsAsync(int limit = 50, CancellationToken ct = default);
 
     /// <summary>
     /// Gets the backlog depth of task queues in the SQL Flow system, providing information about the number of pending tasks in each queue 
@@ -88,14 +88,14 @@ public interface ISqlFlowDashboard
     /// </summary>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns>The Backlog Depth of all task queues</returns>
-    Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(CancellationToken ct = default);
+    Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(int limit = 50, CancellationToken ct = default);
 
     /// <summary>
     /// Gets the retry hotspots for tasks in the SQL Flow system, providing information about which tasks are being retried most frequently.
     /// </summary>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns>The Hotspots of most tasks being retried</returns>
-    Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(CancellationToken ct = default);
+    Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(int limit = 50, CancellationToken ct = default);
 
     /// <summary>
     /// Gets the upcoming wakeup buckets for tasks in the SQL Flow system, providing information about when tasks are scheduled to wake up 
@@ -103,14 +103,14 @@ public interface ISqlFlowDashboard
     /// </summary>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns></returns>
-    Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(CancellationToken ct = default);
+    Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(int limit = 50, CancellationToken ct = default);
 
     /// <summary>
     /// Gets a list of the slowest tasks in the SQL Flow system, providing information about which tasks are taking the longest to complete.
     /// </summary>
     /// <param name="ct">Cancellation token to cancel the operation.</param>
     /// <returns>The list of slowest tasks in the system</returns>
-    Task<List<SlowTaskItem>> GetSlowestTasksAsync(CancellationToken ct = default);
+    Task<List<SlowTaskItem>> GetSlowestTasksAsync(int limit = 50, CancellationToken ct = default);
 
     /// <summary>
     /// Gets a list of failed tasks in the SQL Flow system, providing information about which tasks have failed, their failure reasons, 

@@ -1,26 +1,51 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using SqlFlowSdk;
+using SqlFlowSdk.AiSample;
+using SqlFlowSdk.AiSample.Docker;
+using SqlFlowSdk.AiSample.Models;
+using SqlFlowSdk.AiSample.Services;
 using SqlFlowSdk.Core;
 using SqlFlowSdk.Extensions;
-using Microsoft.AspNetCore.Mvc;
-using SqlFlowSdk;
-using SqlFlowSdk.AiSample.Docker;
-using SqlFlowSdk.AiSample.Services;
-using SqlFlowSdk.AiSample;
-using SqlFlowSdk.AiSample.Models;
-using SqlFlowSdk.Monitoring.Postgres;
 using SqlFlowSdk.Monitoring.AspNetCore;
+using SqlFlowSdk.Monitoring.Postgres;
 
 var builder = WebApplication.CreateBuilder(args);
+
 
 // Start Docker Containers for dependencies
 await DockerContainers.StartAllContainersAsync();
 
 string connectionString = DockerContainers.PostgresContainer.GetConnectionString();
 
+// Add Configuration
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables();
+
 // Add Logging
 builder.Services.AddLogging(loggingBuilder => loggingBuilder.AddConsole());
 
+// Add Cors
+const string CorsPolicyName = "FrontendCorsPolicy";
+
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(CorsPolicyName, policy =>
+    {
+        policy
+            .WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+
+// Add Services
 builder.Services.AddSingleton<ILlmService, LlmService>();
 builder.Services.AddSingleton<IGitHubService, GitHubService>();
 builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationService>();
@@ -45,6 +70,8 @@ builder.Services.AddSqlFlowWorker("ai-agent-queue", worker =>
 });
 
 var app = builder.Build();
+
+app.UseCors(CorsPolicyName);
 
 // Map the SqlFlow Dashboard endpoints for monitoring and managing the workflow system. This provides a web interface to
 // view the status of tasks, queues, and other relevant information about the workflow system.
