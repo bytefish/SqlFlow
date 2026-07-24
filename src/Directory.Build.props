@@ -6,7 +6,6 @@
 	<PackageProjectUrl>https://github.com/bytefish/SqlFlow</PackageProjectUrl>
 	<PackageLicenseExpression>MIT</PackageLicenseExpression>
 	<Copyright>Copyright © 2026</Copyright>
-	<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 	<AssemblyVersion>1.0.0.0</AssemblyVersion>
 	<FileVersion>1.0.0.0</FileVersion>
 	<RepositoryType>git</RepositoryType>
@@ -17,6 +16,9 @@
     <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)../SqlFlowSdk.snk</AssemblyOriginatorKeyFile>
 	<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 	<PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
   <PropertyGroup>
     <PackageOutputPath>$(MSBuildThisFileDirectory)../nuget</PackageOutputPath>

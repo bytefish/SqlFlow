@@ -408,13 +408,13 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             SELECT t.queue_name, t.task_id::text, t.task_name, t.state, t.attempts, t.last_attempt_run::text, t.enqueue_at, r.failed_at, r.failure_reason::text, t.params::text
             FROM ssf.tasks t LEFT JOIN ssf.runs r ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id
             WHERE t.queue_name = @queue
-              AND (@states IS NULL OR t.state = ANY(@states))
-              AND (@min_att IS NULL OR t.attempts >= @min_att)
-              AND (@max_att IS NULL OR t.attempts <= @max_att)
-              AND (@claimed_by IS NULL OR r.claimed_by = @claimed_by)
-              AND (@search_term IS NULL OR (t.task_name ILIKE @search_term OR r.failure_reason::text ILIKE @search_term OR t.params::text ILIKE @search_term))
-              AND (@from_date IS NULL OR t.enqueue_at >= @from_date)
-              AND (@to_date IS NULL OR t.enqueue_at <= @to_date)
+              AND (@states::text[] IS NULL OR t.state = ANY(@states::text[]))
+              AND (@min_att::int IS NULL OR t.attempts >= @min_att::int)
+              AND (@max_att::int IS NULL OR t.attempts <= @max_att::int)
+              AND (@claimed_by::text IS NULL OR r.claimed_by = @claimed_by::text)
+              AND (@search_term::text IS NULL OR (t.task_name ILIKE @search_term::text OR r.failure_reason::text ILIKE @search_term::text OR t.params::text ILIKE @search_term::text))
+              AND (@from_date::timestamptz IS NULL OR t.enqueue_at >= @from_date::timestamptz)
+              AND (@to_date::timestamptz IS NULL OR t.enqueue_at <= @to_date::timestamptz)
             ORDER BY {orderByCol} {orderDir} LIMIT @limit OFFSET @offset";
 
             await using NpgsqlConnection conn = await _dataSource

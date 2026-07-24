@@ -1,4 +1,10 @@
 <Solution>
+  <Folder Name="/ext/">
+    <Project Path="src/SqlFlowSdk.Monitoring.AspNetCore/SqlFlowSdk.Monitoring.AspNetCore.csproj" />
+    <Project Path="src/SqlFlowSdk.Monitoring.Postgres/SqlFlowSdk.Monitoring.Postgres.csproj" />
+    <Project Path="src/SqlFlowSdk.Monitoring.SqlServer/SqlFlowSdk.Monitoring.SqlServer.csproj" />
+    <Project Path="src/SqlFlowSdk.Monitoring/SqlFlowSdk.Monitoring.csproj" />
+  </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/SqlFlowSdk.AiSample/SqlFlowSdk.AiSample.csproj" />
     <Project Path="samples/SqlFlowSdk.Sample/SqlFlowSdk.Sample.csproj" />
@@ -10,10 +16,6 @@
     <File Path="../README.md" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/SqlFlowSdk.Monitoring.AspNetCore/SqlFlowSdk.Monitoring.AspNetCore.csproj" />
-    <Project Path="src/SqlFlowSdk.Monitoring.Postgres/SqlFlowSdk.Monitoring.Postgres.csproj" />
-    <Project Path="src/SqlFlowSdk.Monitoring.SqlServer/SqlFlowSdk.Monitoring.SqlServer.csproj" />
-    <Project Path="src/SqlFlowSdk.Monitoring/SqlFlowSdk.Monitoring.csproj" />
     <Project Path="src/SqlFlowSdk.Postgres/SqlFlowSdk.Postgres.csproj" />
     <Project Path="src/SqlFlowSdk.SqlServer/SqlFlowSdk.SqlServer.csproj" />
     <Project Path="src/SqlFlowSdk/SqlFlowSdk.csproj" />

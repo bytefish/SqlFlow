@@ -1,4 +1,4 @@
-@baseUrl = http://localhost:5000/api/sqlflow-dashboard
+@baseUrl = https://localhost:5000/api/sqlflow-dashboard
 
 ### Fetch queue statistics (System overview)
 GET {{baseUrl}}/stats
