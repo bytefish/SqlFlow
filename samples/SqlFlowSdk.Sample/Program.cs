@@ -24,8 +24,7 @@ builder.Services.AddSingleton<ShippingService>();
 builder.Services.AddSingleton<OrderService>();
 
 // Register the SqlServerFlow SDK
-builder.Services.AddSqlFlowSdk();
-builder.Services.AddSqlFlowPostgres(connectionString);
+builder.Services.AddSqlFlowSdk(connectionString);
 
 // Configure Workers and Jobs. In this example, we have two different queues
 // for standard and VIP orders, each with its own processing configuration.

@@ -24,8 +24,7 @@ builder.Services.AddSingleton<IGitHubService, GitHubService>();
 builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationService>();
 
 // Register the SqlFlow SDK
-builder.Services.AddSqlFlowSdk();
-builder.Services.AddSqlFlowPostgres(connectionString);
+builder.Services.AddSqlFlowSdk(connectionString);
 
 // Configure Workers and Jobs. In this example, we have a queue for AI agents that process tasks related to bug fixing. The
 // worker is configured to handle one task at a time and poll for new tasks every second. The job "solve-bug" is defined

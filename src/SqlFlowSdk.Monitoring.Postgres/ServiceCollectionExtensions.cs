@@ -17,7 +17,7 @@ public static class ServiceCollectionExtensions
     /// <param name="services">The service collection.</param>
     /// <param name="connectionString">The PostgreSQL connection string.</param>
     /// <returns>The service collection for chaining.</returns>
-    public static IServiceCollection AddSqlFlowPostgres(this IServiceCollection services, string connectionString)
+    public static IServiceCollection AddSqlFlowDashboardPostgres(this IServiceCollection services, string connectionString)
     {
         if (string.IsNullOrWhiteSpace(connectionString))
         {

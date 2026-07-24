@@ -1,7 +1,10 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Npgsql;
+using SqlFlowSdk.Core;
 using SqlFlowSdk.Database;
 using System.Data.Common;
 
@@ -16,16 +19,22 @@ public static class ServiceCollectionExtensions
     /// <param name="services">The service collection.</param>
     /// <param name="connectionString">The PostgreSQL connection string.</param>
     /// <returns>The service collection for chaining.</returns>
-    public static IServiceCollection AddSqlFlowPostgres(this IServiceCollection services, string connectionString)
+    public static IServiceCollection AddSqlFlowSdk(this IServiceCollection services, string connectionString)
     {
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
         }
 
-        services.AddSingleton<DbDataSource>(_ => NpgsqlDataSource.Create(connectionString));
+        // Register Publish Abstraction
+        services.AddSingleton<IEventPublisher, SqlFlowEventPublisher>();
 
-        services.AddSingleton<ISqlFlowDatabase, PostgresFlowDatabase>();
+        services.TryAddSingleton<ISqlFlow>(sp =>
+        {            
+            NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
+
+            return new SqlFlow(sp.GetRequiredService<ILogger<SqlFlow>>(), dataSource, new PostgresFlowDatabase());
+        });
 
         return services;
     }
