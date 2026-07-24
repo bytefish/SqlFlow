@@ -18,6 +18,9 @@
 	<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 	<PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+  <PropertyGroup>
+    <PackageOutputPath>$(MSBuildThisFileDirectory)../nuget</PackageOutputPath>
+  </PropertyGroup>
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)../README.md" Pack="true" PackagePath="\" />
   </ItemGroup>

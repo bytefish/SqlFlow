@@ -4,24 +4,6 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
-		<Company />
-		<Product />
-		<Description>An SQL Server SDK for the SqlFlow Workflow System.</Description>
-		<PackageTags>SqlServerFlow, workflows</PackageTags>
-		<RepositoryUrl>https://github.com/bytefish/SqlServerFlow.NET</RepositoryUrl>
-		<PackageProjectUrl>https://github.com/bytefish/SqlServerFlow.NET</PackageProjectUrl>
-		<PackageLicenseExpression>MIT</PackageLicenseExpression>
-		<Copyright>Copyright © 2026</Copyright>
-		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-		<AssemblyVersion>1.0.2.0</AssemblyVersion>
-		<FileVersion>1.0.2.0</FileVersion>
-		<RepositoryType>git</RepositoryType>
-		<Version>1.0.2</Version>
-		<IncludeSource>True</IncludeSource>
-		<IncludeSymbols>True</IncludeSymbols>
-		
-		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-		<PackageReadmeFile>README.md</PackageReadmeFile>
 	</PropertyGroup>
 
 	<ItemGroup>
