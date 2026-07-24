@@ -8,6 +8,8 @@ using SqlFlowSdk.AiSample.Docker;
 using SqlFlowSdk.AiSample.Services;
 using SqlFlowSdk.AiSample;
 using SqlFlowSdk.AiSample.Models;
+using SqlFlowSdk.Monitoring.Postgres;
+using SqlFlowSdk.Monitoring.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,6 +27,7 @@ builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationServic
 
 // Register the SqlFlow SDK
 builder.Services.AddSqlFlowSdk(connectionString);
+builder.Services.AddSqlFlowDashboardPostgres(connectionString);
 
 // Configure Workers and Jobs. In this example, we have a queue for AI agents that process tasks related to bug fixing. The
 // worker is configured to handle one task at a time and poll for new tasks every second. The job "solve-bug" is defined
@@ -42,6 +45,10 @@ builder.Services.AddSqlFlowWorker("ai-agent-queue", worker =>
 });
 
 var app = builder.Build();
+
+// Map the SqlFlow Dashboard endpoints for monitoring and managing the workflow system. This provides a web interface to
+// view the status of tasks, queues, and other relevant information about the workflow system.
+app.MapSqlFlowDashboardEndpoints();
 
 // A Webhook triggers the Agent, such as a new JIRA ticket or GitHub issue
 app.MapPost("/agent/start", async (ISqlFlow client, [FromBody] AgentTask task, CancellationToken ct) =>
