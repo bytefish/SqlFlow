@@ -51,7 +51,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
 
         string sql = @"
             SELECT queue_name, state, COUNT(*) as count 
-            FROM relay.tasks WITH (NOLOCK)
+            FROM ssf.tasks WITH (NOLOCK)
             GROUP BY queue_name, state
             ORDER BY queue_name, state";
 
@@ -83,7 +83,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
                 SUM(CASE WHEN r.state = 'completed' THEN 1 ELSE 0 END) AS completed_count,
                 SUM(CASE WHEN r.state = 'failed' THEN 1 ELSE 0 END) AS failed_count,
                 ISNULL(AVG(CAST(DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS FLOAT)), 0) AS avg_duration_ms
-            FROM relay.runs r WITH (NOLOCK)
+            FROM ssf.runs r WITH (NOLOCK)
             WHERE r.completed_at >= DATEADD(second, -@window_seconds, SYSDATETIMEOFFSET())
             GROUP BY DATEADD(minute, DATEDIFF(minute, 0, r.completed_at), 0), r.queue_name
             ORDER BY time_bucket DESC";
@@ -114,7 +114,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         string sql = @"
             WITH Latencies AS (
                 SELECT t.task_name, DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS duration_ms
-                FROM relay.runs r WITH (NOLOCK) JOIN relay.tasks t WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.task_id = r.task_id
+                FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.task_id = r.task_id
                 WHERE r.state = 'completed' AND (@queue IS NULL OR r.queue_name = @queue)
             )
             SELECT DISTINCT task_name,
@@ -153,7 +153,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
             JOIN sys.indexes i ON t.object_id = i.object_id
             JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id
             JOIN sys.allocation_units a ON p.partition_id = a.container_id
-            WHERE t.schema_id = SCHEMA_ID('relay') AND t.name IN ('tasks', 'runs')";
+            WHERE t.schema_id = SCHEMA_ID('ssf') AND t.name IN ('tasks', 'runs')";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -177,7 +177,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<ActiveWorkerItem> result = [];
 
-        string sql = "SELECT queue_name, claimed_by, COUNT(*) as active_runs FROM relay.runs WITH (NOLOCK) WHERE state = 'running' AND claimed_by IS NOT NULL GROUP BY queue_name, claimed_by ORDER BY active_runs DESC";
+        string sql = "SELECT queue_name, claimed_by, COUNT(*) as active_runs FROM ssf.runs WITH (NOLOCK) WHERE state = 'running' AND claimed_by IS NOT NULL GROUP BY queue_name, claimed_by ORDER BY active_runs DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -201,7 +201,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<QueueWaitTimeItem> result = [];
 
-        string sql = "SELECT queue_name, ISNULL(AVG(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS avg_wait_ms, ISNULL(MAX(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS max_wait_ms FROM relay.tasks WITH (NOLOCK) WHERE first_started_at IS NOT NULL AND enqueue_at >= DATEADD(day, -7, SYSDATETIMEOFFSET()) GROUP BY queue_name";
+        string sql = "SELECT queue_name, ISNULL(AVG(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS avg_wait_ms, ISNULL(MAX(CAST(DATEDIFF_BIG(millisecond, enqueue_at, first_started_at) AS FLOAT)), 0) AS max_wait_ms FROM ssf.tasks WITH (NOLOCK) WHERE first_started_at IS NOT NULL AND enqueue_at >= DATEADD(day, -7, SYSDATETIMEOFFSET()) GROUP BY queue_name";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -226,7 +226,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
         List<TaskFailureHotspotItem> hotspots = [];
 
         string timeFilter = lookbackWindow.HasValue ? "AND r.failed_at >= DATEADD(second, -@window_seconds, SYSDATETIMEOFFSET())" : "";
-        string sql = $"SELECT TOP 50 t.queue_name, t.task_name, COUNT(*) as failure_count, MAX(r.failed_at) FROM relay.runs r WITH (NOLOCK) JOIN relay.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} GROUP BY t.queue_name, t.task_name ORDER BY failure_count DESC";
+        string sql = $"SELECT TOP 50 t.queue_name, t.task_name, COUNT(*) as failure_count, MAX(r.failed_at) FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} GROUP BY t.queue_name, t.task_name ORDER BY failure_count DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -255,7 +255,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<ActiveWaitItem> waits = [];
 
-        string sql = "SELECT queue_name, event_name, COUNT(*) as waiting_count, MIN(created_at) FROM relay.waits WITH (NOLOCK) GROUP BY queue_name, event_name ORDER BY waiting_count DESC";
+        string sql = "SELECT queue_name, event_name, COUNT(*) as waiting_count, MIN(created_at) FROM ssf.waits WITH (NOLOCK) GROUP BY queue_name, event_name ORDER BY waiting_count DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -279,7 +279,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<QueueBacklogItem> backlog = [];
 
-        string sql = "SELECT queue_name, COUNT(*) as pending_count, MIN(enqueue_at) FROM relay.tasks WITH (NOLOCK) WHERE state = 'pending' GROUP BY queue_name ORDER BY pending_count DESC";
+        string sql = "SELECT queue_name, COUNT(*) as pending_count, MIN(enqueue_at) FROM ssf.tasks WITH (NOLOCK) WHERE state = 'pending' GROUP BY queue_name ORDER BY pending_count DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -303,7 +303,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<RetryHotspotItem> hotspots = [];
 
-        string sql = "SELECT TOP 50 queue_name, CAST(task_id AS NVARCHAR(36)), task_name, attempts, state FROM relay.tasks WITH (NOLOCK) WHERE attempts > 1 AND state IN ('pending', 'sleeping') ORDER BY attempts DESC";
+        string sql = "SELECT TOP 50 queue_name, CAST(task_id AS NVARCHAR(36)), task_name, attempts, state FROM ssf.tasks WITH (NOLOCK) WHERE attempts > 1 AND state IN ('pending', 'sleeping') ORDER BY attempts DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -327,7 +327,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<UpcomingWakeupBucketItem> wakeups = [];
 
-        string sql = "SELECT TOP 50 DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0) AS time_bucket, r.queue_name, COUNT(*) AS sleeping_count FROM relay.runs r WITH (NOLOCK) WHERE r.state = 'sleeping' AND r.available_at > SYSDATETIMEOFFSET() GROUP BY DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0), r.queue_name ORDER BY time_bucket ASC";
+        string sql = "SELECT TOP 50 DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0) AS time_bucket, r.queue_name, COUNT(*) AS sleeping_count FROM ssf.runs r WITH (NOLOCK) WHERE r.state = 'sleeping' AND r.available_at > SYSDATETIMEOFFSET() GROUP BY DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0), r.queue_name ORDER BY time_bucket ASC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -350,7 +350,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<SlowTaskItem> slowTasks = [];
 
-        string sql = "SELECT TOP 50 t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, CAST(DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS FLOAT) AS duration_ms, r.completed_at FROM relay.runs r WITH (NOLOCK) JOIN relay.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'completed' AND r.completed_at >= DATEADD(day, -1, SYSDATETIMEOFFSET()) ORDER BY duration_ms DESC";
+        string sql = "SELECT TOP 50 t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, CAST(DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS FLOAT) AS duration_ms, r.completed_at FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'completed' AND r.completed_at >= DATEADD(day, -1, SYSDATETIMEOFFSET()) ORDER BY duration_ms DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -374,7 +374,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
     {
         List<FailedTaskItem> tasks = [];
 
-        string sql = "SELECT TOP (@limit) t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, t.attempts, CAST(t.last_attempt_run AS NVARCHAR(36)), r.failed_at, r.failure_reason FROM relay.tasks t WITH (NOLOCK) LEFT JOIN relay.runs r WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id WHERE t.state = 'failed' ORDER BY r.failed_at DESC";
+        string sql = "SELECT TOP (@limit) t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, t.attempts, CAST(t.last_attempt_run AS NVARCHAR(36)), r.failed_at, r.failure_reason FROM ssf.tasks t WITH (NOLOCK) LEFT JOIN ssf.runs r WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id WHERE t.state = 'failed' ORDER BY r.failed_at DESC";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -397,7 +397,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
 
     public async Task<TaskDetailItem?> GetTaskDetailsAsync(string queueName, string taskId, CancellationToken ct = default)
     {
-        string sql = "SELECT task_name, state, enqueue_at, first_started_at, completed_payload, params FROM relay.tasks WITH (NOLOCK) WHERE queue_name = @queue AND task_id = @task_id";
+        string sql = "SELECT task_name, state, enqueue_at, first_started_at, completed_payload, params FROM ssf.tasks WITH (NOLOCK) WHERE queue_name = @queue AND task_id = @task_id";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -435,7 +435,7 @@ public class SqlServerSqlFlowDashboard : ISqlFlowDashboard
 
         string sql = $@"
             SELECT t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, t.state, t.attempts, CAST(t.last_attempt_run AS NVARCHAR(36)), t.enqueue_at, r.failed_at, r.failure_reason, t.params
-            FROM relay.tasks t WITH (NOLOCK) LEFT JOIN relay.runs r WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id
+            FROM ssf.tasks t WITH (NOLOCK) LEFT JOIN ssf.runs r WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id
             WHERE t.queue_name = @queue
               AND (@states_csv IS NULL OR t.state IN (SELECT value FROM STRING_SPLIT(@states_csv, ',')))
               AND (@min_att IS NULL OR t.attempts >= @min_att)

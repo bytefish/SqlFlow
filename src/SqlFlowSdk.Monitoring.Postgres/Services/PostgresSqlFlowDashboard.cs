@@ -37,7 +37,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
 
             string sql = @"
             SELECT queue_name, state, COUNT(*)::int as count 
-            FROM relay.tasks 
+            FROM ssf.tasks 
             GROUP BY queue_name, state
             ORDER BY queue_name, state";
 
@@ -67,7 +67,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
                 COUNT(*) FILTER (WHERE r.state = 'completed')::int AS completed_count,
                 COUNT(*) FILTER (WHERE r.state = 'failed')::int AS failed_count,
                 COALESCE(AVG(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000), 0) AS avg_duration_ms
-            FROM relay.runs r
+            FROM ssf.runs r
             WHERE r.completed_at >= NOW() - (@window_seconds || ' seconds')::INTERVAL
             GROUP BY 1, 2 ORDER BY time_bucket DESC";
 
@@ -102,7 +102,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
                 percentile_cont(0.50) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000) AS p50,
                 percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000) AS p95,
                 percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000) AS p99
-            FROM relay.runs r JOIN relay.tasks t ON t.queue_name = r.queue_name AND t.task_id = r.task_id
+            FROM ssf.runs r JOIN ssf.tasks t ON t.queue_name = r.queue_name AND t.task_id = r.task_id
             WHERE r.state = 'completed' AND (@queue IS NULL OR r.queue_name = @queue)
             GROUP BY t.task_name";
 
@@ -129,8 +129,8 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         public async Task<DatabaseHealthItem> GetDatabaseHealthAsync(string queueName, CancellationToken ct = default)
         {
             string sql = @"
-            SELECT pg_total_relation_size('relay.tasks') AS tasks_bytes,
-                   pg_total_relation_size('relay.runs') AS runs_bytes,
+            SELECT pg_total_relation_size('ssf.tasks') AS tasks_bytes,
+                   pg_total_relation_size('ssf.runs') AS runs_bytes,
                    (SELECT count(*)::int FROM pg_locks WHERE granted = false) AS blocked_locks";
 
             await using NpgsqlConnection conn = await _dataSource
@@ -155,7 +155,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<ActiveWorkerItem> result = [];
 
-            string sql = "SELECT queue_name, claimed_by, COUNT(*)::int as active_runs FROM relay.runs WHERE state = 'running' AND claimed_by IS NOT NULL GROUP BY queue_name, claimed_by ORDER BY active_runs DESC";
+            string sql = "SELECT queue_name, claimed_by, COUNT(*)::int as active_runs FROM ssf.runs WHERE state = 'running' AND claimed_by IS NOT NULL GROUP BY queue_name, claimed_by ORDER BY active_runs DESC";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -179,7 +179,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<QueueWaitTimeItem> result = [];
 
-            string sql = "SELECT queue_name, COALESCE(AVG(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS avg_wait_ms, COALESCE(MAX(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS max_wait_ms FROM relay.tasks WHERE first_started_at IS NOT NULL AND enqueue_at >= NOW() - INTERVAL '7 days' GROUP BY queue_name";
+            string sql = "SELECT queue_name, COALESCE(AVG(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS avg_wait_ms, COALESCE(MAX(EXTRACT(EPOCH FROM (first_started_at - enqueue_at)) * 1000), 0) AS max_wait_ms FROM ssf.tasks WHERE first_started_at IS NOT NULL AND enqueue_at >= NOW() - INTERVAL '7 days' GROUP BY queue_name";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -205,7 +205,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
             
             string timeFilter = lookbackWindow.HasValue ? "AND r.failed_at >= NOW() - (@window_seconds || ' seconds')::INTERVAL" : "";
             
-            string sql = $"SELECT t.queue_name, t.task_name, COUNT(*)::int as failure_count, MAX(r.failed_at) FROM relay.runs r JOIN relay.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} GROUP BY t.queue_name, t.task_name ORDER BY failure_count DESC LIMIT 50";
+            string sql = $"SELECT t.queue_name, t.task_name, COUNT(*)::int as failure_count, MAX(r.failed_at) FROM ssf.runs r JOIN ssf.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'failed' {timeFilter} GROUP BY t.queue_name, t.task_name ORDER BY failure_count DESC LIMIT 50";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -233,7 +233,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<ActiveWaitItem> waits = [];
             
-            string sql = "SELECT queue_name, event_name, COUNT(*)::int as waiting_count, MIN(created_at) FROM relay.waits GROUP BY queue_name, event_name ORDER BY waiting_count DESC";
+            string sql = "SELECT queue_name, event_name, COUNT(*)::int as waiting_count, MIN(created_at) FROM ssf.waits GROUP BY queue_name, event_name ORDER BY waiting_count DESC";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -256,7 +256,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<QueueBacklogItem> backlog = [];
 
-            string sql = "SELECT queue_name, COUNT(*)::int as pending_count, MIN(enqueue_at) FROM relay.tasks WHERE state = 'pending' GROUP BY queue_name ORDER BY pending_count DESC";
+            string sql = "SELECT queue_name, COUNT(*)::int as pending_count, MIN(enqueue_at) FROM ssf.tasks WHERE state = 'pending' GROUP BY queue_name ORDER BY pending_count DESC";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -280,7 +280,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<RetryHotspotItem> hotspots = [];
             
-            string sql = "SELECT queue_name, task_id::text, task_name, attempts, state FROM relay.tasks WHERE attempts > 1 AND state IN ('pending', 'sleeping') ORDER BY attempts DESC LIMIT 50";
+            string sql = "SELECT queue_name, task_id::text, task_name, attempts, state FROM ssf.tasks WHERE attempts > 1 AND state IN ('pending', 'sleeping') ORDER BY attempts DESC LIMIT 50";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -304,7 +304,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<UpcomingWakeupBucketItem> wakeups = [];
 
-            string sql = "SELECT date_trunc('hour', r.available_at) AS time_bucket, r.queue_name, COUNT(*)::int AS sleeping_count FROM relay.runs r WHERE r.state = 'sleeping' AND r.available_at > NOW() GROUP BY 1, 2 ORDER BY 1 ASC LIMIT 50";
+            string sql = "SELECT date_trunc('hour', r.available_at) AS time_bucket, r.queue_name, COUNT(*)::int AS sleeping_count FROM ssf.runs r WHERE r.state = 'sleeping' AND r.available_at > NOW() GROUP BY 1, 2 ORDER BY 1 ASC LIMIT 50";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -328,7 +328,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<SlowTaskItem> slowTasks = [];
             
-            string sql = "SELECT t.queue_name, t.task_id::text, t.task_name, EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000 AS duration_ms, r.completed_at FROM relay.runs r JOIN relay.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'completed' AND r.completed_at >= NOW() - INTERVAL '24 hours' ORDER BY duration_ms DESC LIMIT 50";
+            string sql = "SELECT t.queue_name, t.task_id::text, t.task_name, EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000 AS duration_ms, r.completed_at FROM ssf.runs r JOIN ssf.tasks t ON r.queue_name = t.queue_name AND r.task_id = t.task_id WHERE r.state = 'completed' AND r.completed_at >= NOW() - INTERVAL '24 hours' ORDER BY duration_ms DESC LIMIT 50";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -351,7 +351,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
         {
             List<FailedTaskItem> tasks = [];
             
-            string sql = "SELECT t.queue_name, t.task_id, t.task_name, t.attempts, t.last_attempt_run, r.failed_at, r.failure_reason::text FROM relay.tasks t LEFT JOIN relay.runs r ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id WHERE t.state = 'failed' ORDER BY r.failed_at DESC NULLS LAST LIMIT @limit";
+            string sql = "SELECT t.queue_name, t.task_id, t.task_name, t.attempts, t.last_attempt_run, r.failed_at, r.failure_reason::text FROM ssf.tasks t LEFT JOIN ssf.runs r ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id WHERE t.state = 'failed' ORDER BY r.failed_at DESC NULLS LAST LIMIT @limit";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -374,7 +374,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
 
         public async Task<TaskDetailItem?> GetTaskDetailsAsync(string queueName, string taskId, CancellationToken ct = default)
         {
-            string sql = "SELECT task_name, state, enqueue_at, first_started_at, completed_payload, params::text FROM relay.tasks WHERE queue_name = @queue AND task_id = @task_id";
+            string sql = "SELECT task_name, state, enqueue_at, first_started_at, completed_payload, params::text FROM ssf.tasks WHERE queue_name = @queue AND task_id = @task_id";
 
             await using NpgsqlConnection conn = await _dataSource
                 .OpenConnectionAsync(ct)
@@ -406,7 +406,7 @@ namespace SqlFlowSdk.Monitoring.Postgres.Services
 
             string sql = $@"
             SELECT t.queue_name, t.task_id::text, t.task_name, t.state, t.attempts, t.last_attempt_run::text, t.enqueue_at, r.failed_at, r.failure_reason::text, t.params::text
-            FROM relay.tasks t LEFT JOIN relay.runs r ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id
+            FROM ssf.tasks t LEFT JOIN ssf.runs r ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id
             WHERE t.queue_name = @queue
               AND (@states IS NULL OR t.state = ANY(@states))
               AND (@min_att IS NULL OR t.attempts >= @min_att)
