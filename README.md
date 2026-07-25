@@ -49,7 +49,7 @@ Start by creating the `ssf` Database Schema, that holds all required database ob
 * `sql/ssf-postgres.sql`
 * `sql/ssf-sqlserver.sql`
 
-The define an `IJob`, which is going to model an Order Fulfillment Task:
+Then define an `IJob`, which is going to model an Order Fulfillment Task:
 
 ```csharp
 public class FulfillOrderJob : IJob<OrderData, FulfillOrderResult>
