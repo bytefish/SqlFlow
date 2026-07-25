@@ -629,7 +629,7 @@ export class SqlFlowManagementService {
   private readonly http = inject(HttpClient);
   private readonly appSettings = inject(AppSettingsService);
 
-  readonly currentLanguage = signal<'en' | 'de' | 'zh'>('de');
+  readonly currentLanguage = signal<'en' | 'de' | 'zh'>('en');
 
   readonly t = computed(() => {
     switch (this.currentLanguage()) {

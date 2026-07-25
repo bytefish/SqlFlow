@@ -85,7 +85,7 @@ app.MapPost("/agent/start", async (ISqlFlow client, [FromBody] AgentTask task, C
         Queue = "ai-agent-queue"
     }, "solve-bug", task, ct);
 
-    return Results.Ok(new { RunId = result.RunId, Status = $"Agent dispatched to fix Isse #{task.IssueId}" });
+    return Results.Ok(new { RunId = result.RunId, TaskId = result.TaskId, Status = $"Agent dispatched to fix Isse #{task.IssueId}" });
 });
 
 // A Lead-Developer clicks on "Approve" or "Reject", with Feeedback
