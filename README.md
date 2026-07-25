@@ -1,10 +1,14 @@
-# SqlFlow.NET #
+# SqlFlow #
 
-SqlFlow is a simple durable execution workflow system, for PostgreSQL and SQL Server. It handles scheduling and retries, without needing any other services to run in addition to PostgreSQL or SQL Server.
+SqlFlow is a simple durable execution workflow system, for PostgreSQL and SQL Server. It handles scheduling 
+and retries, without needing any other services to run in addition to PostgreSQL or SQL Server.
 
 The SQL Script for creating the SqlFlow Database Schema is available here:
 
 * [https://github.com/bytefish/SqlFlow/blob/main/sql/](https://github.com/bytefish/SqlFlow/blob/main/sql)
+
+It took a large deal of inspiration from Absurd.NET, but it features a simpler database model, 
+that 
 
 ## 1. Setup ##
 
@@ -14,15 +18,39 @@ To include SqlFlowSdk in your project, install the NuGet package using the .NET 
 dotnet add package SqlFlowSdk
 ```
 
-Alternatively, you can use the NuGet Package Manager in Visual Studio:
+Also add the SDK Implementation for the Database Management System to use:
 
 ```
-Install-Package SqlFlowSdk
+dotnet add package SqlFlowSdk.Postgres
+dotnet add package SqlFlowSdk.SqlServer
 ```
+
+If you want to add the Management Endpoints for the Control Panel, you need to add:
+
+```
+dotnet add package SqlFlowSdk.Management
+```
+
+Also add the Management API Implementation for the Database Management System to use:
+
+```
+dotnet add package SqlFlowSdk.Management.Postgres
+dotnet add package SqlFlowSdk.Management.SqlServer
+```
+
+You'll then need to create the `ssf` Database Schema in the DBMS of your choice:
+
+* `sql/ssf-postgres.sql`
+* `sql/ssf-sqlserver.sql`
 
 ## 2. Quick Start ##
 
-We start by defining a `IJob`, which is going to model an Order Fulfillment Task:
+Start by creating the `ssf` Database Schema, that holds all required database objects for the Workflow system:
+
+* `sql/ssf-postgres.sql`
+* `sql/ssf-sqlserver.sql`
+
+The define an `IJob`, which is going to model an Order Fulfillment Task:
 
 ```csharp
 public class FulfillOrderJob : IJob<OrderData, FulfillOrderResult>
@@ -182,3 +210,16 @@ Content-Type: application/json
   "pickedAt": "2024-06-01T10:15:30Z"
 }
 ```
+
+## 3. Management, Control Panel and Diagnosing the System Health ##
+
+SqlFlow comes with a Management API and a Control Panel to understand you systems health and quickly 
+find out how many tasks are being processed, which tasks are slow, which tasks currently await events, 
+why tasks are failing and search for specific tasks.
+
+
+
+It isn't meant to replace your Helm or Grafana dashboards, that also provide alarms and such. Think of it 
+as another tool to observe your system at a much deeper level, than coarse metrics could provide.
+
+## 4. A more complete sample application for AI Agents ##

@@ -41,7 +41,7 @@ public class AutonomousAgentJob : IJob<AgentTask, AgentResult>
             attempt++;
 
             // Generate CorrelationID for the Event
-            string correlationId = $"attempt-{attempt}";
+            string correlationId = $"{ctx.TaskId}-attempt-{attempt}";
 
             _logger.LogInformation("Attempt {attempt}/3: Generating a fix based on: {feedback}", attempt, lastFeedback);
 

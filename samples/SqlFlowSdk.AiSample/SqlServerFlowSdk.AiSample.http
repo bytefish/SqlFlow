@@ -1,12 +1,18 @@
 ### Start the Agent Job for an AI fix for the Issue.
+# @name startAgent
 POST https://localhost:5000/agent/start
 Content-Type: application/json
 {
     "issue_id": "12345"
 }
 
+
+### Extract the Task ID and write it to a variable for later use.
+@taskId = {{startAgent.response.body.taskId}}
+
+
 ### We cannot approve such a simple fix, reject and tell it to improve.
-POST https://localhost:5000/agent/review/12345/attempt-1
+POST https://localhost:5000/agent/review/{{taskId}}/attempt-1
 Content-Type: application/json
 {
     "approved": false,
@@ -14,7 +20,7 @@ Content-Type: application/json
 }
 
 ### Send Human Feedback to the Agent
-POST https://localhost:5000/agent/review/12345/attempt-2
+POST https://localhost:5000/agent/review/{{taskId}}/attempt-2
 Content-Type: application/json
 {
     "approved": true,

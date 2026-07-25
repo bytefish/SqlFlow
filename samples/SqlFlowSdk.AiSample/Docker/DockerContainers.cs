@@ -1,8 +1,5 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-using DotNet.Testcontainers.Builders;
-using DotNet.Testcontainers.Configurations;
-using DotNet.Testcontainers.Networks;
 using Testcontainers.PostgreSql;
 
 namespace SqlFlowSdk.AiSample.Docker
@@ -11,7 +8,7 @@ namespace SqlFlowSdk.AiSample.Docker
     {
         public static PostgreSqlContainer PostgresContainer = new PostgreSqlBuilder("postgres:18")
             // Mount SQL Scripts 
-            .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "Resources/sql/ssf-postgres.sql"), "/docker-entrypoint-initdb.d/1-ssf-postgres.sql")
+            .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "../../sql/ssf-postgres.sql"), "/docker-entrypoint-initdb.d/1-ssf-postgres.sql")
             // Set Username and Password
             .WithUsername("postgres")
             .WithPassword("password")
