@@ -218,14 +218,17 @@ find out how many tasks are being processed, which tasks are slow, which tasks c
 why tasks are failing and search for specific tasks.
 
 
+<a href="https://raw.githubusercontent.com/bytefish/SqlFlow/main/doc/control-panel-event-blockades.jpg">
+    <img src="https://raw.githubusercontent.com/bytefish/SqlFlow/main/doc/control-panel-event-blockades.jpg" alt="Screenshot of Event Blockades within the SqlFlow System" width="100%" />
+</a>
+
 
 It isn't meant to replace your Helm or Grafana dashboards, that also provide alarms and such. Think of it 
 as another tool to observe your system at a much deeper level, than coarse metrics could provide.
 
 ## 4. A more complete application: Durable AI Agents ##
 
-
-## What we are going to build ##
+### What we are going to build ###
 
 The classic examples for durable execution are usually e-commerce checkouts or payment processing scenarios. But there's another rapidly 
 growing use case developers are dealing with: Autonomous AI Agents. Building AI agents that interact with external APIs, write code, 
@@ -240,7 +243,7 @@ Traditional approaches require you to build complex state machines, database pol
 we can write our agent as standard, sequential C# code. The framework will automatically checkpoint the state to Postgres, sleep without 
 blocking server threads, and wake up exactly where it left off.
 
-## Building an Agent Job ##
+### Building an Agent Job ###
 
 To demonstrate how durable execution with SqlFlow works, we are going to build an autonomous AI agent that 
 fixes bugs. The workflow is quickly laid out as: 
@@ -294,7 +297,7 @@ public class AgentResult
 }
 ```
 
-## The LLM Service ##
+### The LLM Service ###
 
 Next, we need a service to handle the AI code generation. In the real world, calling an LLM is a slow (and expensive) and the HTTP 
 requests might fail or time out. We are wrapping these expensive calls with SqlFlow, so we don't lose all our state, if the 
@@ -403,7 +406,7 @@ public class GitHubService : IGitHubService
 }
 ```
 
-## The Autonomous Agent Job ##
+### The Autonomous Agent Job ###
 
 We define our logic inside an `IJob`. The magic is in the `ctx.Step` method: every time a step completes, its result is automatically checkpointed to the Postgres 
 database. If the process crashes or is restarted, the framework replays the job. It skips the already completed steps and loads their results directly from 
@@ -515,7 +518,7 @@ public class AutonomousAgentJob : IJob<AgentTask, AgentResult>
 }
 ```
 
-## Putting It All Together ##
+### Putting It All Together ###
 
 What's left is registering all dependencies.
 
@@ -536,14 +539,7 @@ It looks like this.
 ```csharp
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-using SqlFlowSdk;
-using SqlFlowSdk.AiSample;
-using SqlFlowSdk.AiSample.Docker;
-using SqlFlowSdk.AiSample.Models;
-using SqlFlowSdk.AiSample.Services;
-using SqlFlowSdk.Core;
-using SqlFlowSdk.Extensions;
-using Microsoft.AspNetCore.Mvc;
+// ...
 
 var builder = WebApplication.CreateBuilder(args);
 
