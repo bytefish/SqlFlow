@@ -236,13 +236,13 @@ or restarts while waiting for a 30-second AI generation, standard async and awai
 2. You don't want an AI to push code to production or execute financial transactions without a human looking at it. Agents need to pause 
 their execution, ask a human for permission and resume only when approved. This is sometimes hours or days later.
 
-Traditional approaches require you to build complex state machines, database polling loops, or heavy external infrastructure. With SqlFlow.NET, 
-we can write our agent as standard, sequential C# code. The framework will automatically checkpoint the state to Postgres, sleep without blocking 
-server threads, and wake up exactly where it left off.
+Traditional approaches require you to build complex state machines, database polling loops, or heavy external infrastructure. With SqlFlow, 
+we can write our agent as standard, sequential C# code. The framework will automatically checkpoint the state to Postgres, sleep without 
+blocking server threads, and wake up exactly where it left off.
 
 ## Building an Agent Job ##
 
-To demonstrate how durable execution with SqlFlow.NET works, we are going to build an autonomous AI agent that 
+To demonstrate how durable execution with SqlFlow works, we are going to build an autonomous AI agent that 
 fixes bugs. The workflow is quickly laid out as: 
 
 1. The agent receives a GitHub issue ID and fetches the stack trace.  
@@ -297,7 +297,7 @@ public class AgentResult
 ## The LLM Service ##
 
 Next, we need a service to handle the AI code generation. In the real world, calling an LLM is a slow (and expensive) and the HTTP 
-requests might fail or time out. We are wrapping these expensive calls with SqlFlow.NET, so we don't lose all our state, if the 
+requests might fail or time out. We are wrapping these expensive calls with SqlFlow, so we don't lose all our state, if the 
 server crashes.
 
 For this demonstration, we are simulating ab LLM API call with some delay and return a hardcoded "code fixes" based on a reviewer's feedback:
