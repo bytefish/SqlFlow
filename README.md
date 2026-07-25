@@ -7,8 +7,7 @@ The SQL Script for creating the SqlFlow Database Schema is available here:
 
 * [https://github.com/bytefish/SqlFlow/blob/main/sql/](https://github.com/bytefish/SqlFlow/blob/main/sql)
 
-It took a large deal of inspiration from Absurd, but it features a simpler database model, 
-that 
+It took a large deal of inspiration from Absurd, but it features a much simpler database model. 
 
 ## 1. Setup ##
 
