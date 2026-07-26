@@ -6,11 +6,11 @@ using System.Data.Common;
 
 namespace SqlFlowSdk.Management.Postgres.Services
 {
-    public class PostgresSqlFlowManagementService : ISqlFlowManagementService
+    public class PostgresSqlFlowQueryService : ISqlFlowQueryService
     {
         private readonly NpgsqlDataSource _dataSource;
 
-        public PostgresSqlFlowManagementService(NpgsqlDataSource dataSource)
+        public PostgresSqlFlowQueryService(NpgsqlDataSource dataSource)
         {
             _dataSource = dataSource;
         }

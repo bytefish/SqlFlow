@@ -21,7 +21,7 @@ public static class DbDataReaderExtensions
     }
 }
 
-public class SqlServerSqlManagementService : ISqlFlowManagementService
+public class SqlServerSqlManagementService : ISqlFlowQueryService
 {
     private readonly DbDataSource _dataSource;
 

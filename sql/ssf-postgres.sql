@@ -1040,3 +1040,42 @@ BEGIN
     RETURN QUERY SELECT v_deleted_count;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION ssf.cleanup_events(
+    p_queue_name TEXT,
+    p_ttl_seconds INT,
+    p_limit INT DEFAULT 1000
+)
+RETURNS TABLE (deleted_events INT)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_cutoff TIMESTAMPTZ;
+    v_deleted_count INT := 0;
+BEGIN
+    IF p_ttl_seconds IS NULL OR p_ttl_seconds < 0 THEN
+        RAISE EXCEPTION 'TTL must be a non-negative number of seconds' USING ERRCODE = '50023';
+    END IF;
+
+    v_cutoff := v_now - (p_ttl_seconds || ' seconds')::INTERVAL;
+
+    CREATE TEMP TABLE IF NOT EXISTS to_delete_events_temp (event_name VARCHAR(450)) ON COMMIT DROP;
+    TRUNCATE to_delete_events_temp;
+
+    INSERT INTO to_delete_events_temp (event_name)
+    SELECT event_name
+    FROM ssf.events
+    WHERE queue_name = p_queue_name AND emitted_at < v_cutoff
+    ORDER BY emitted_at
+    LIMIT p_limit;
+
+    WITH del AS (
+        DELETE FROM ssf.events e USING to_delete_events_temp d WHERE e.queue_name = p_queue_name AND e.event_name = d.event_name
+        RETURNING 1
+    )
+    SELECT count(*) INTO v_deleted_count FROM del;
+
+    RETURN QUERY SELECT v_deleted_count;
+END;
+$$;

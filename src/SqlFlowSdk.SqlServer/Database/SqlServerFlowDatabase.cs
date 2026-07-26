@@ -269,6 +269,51 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         }, cancellationToken);
     }
 
+
+    public async Task ReleaseWorkerClaimsAsync(DbConnection conn, string queue, string workerId, CancellationToken cancellationToken)
+    {
+        using SqlCommand cmd = new("ssf.release_worker_claims", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
+
+        AddParam(cmd, "@p_queue_name", queue);
+        AddParam(cmd, "@p_worker_id", workerId);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<int> CleanupTasksAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
+    {
+        using SqlCommand cmd = new("ssf.cleanup_tasks", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
+
+        AddParam(cmd, "@queue", queue);
+        AddParam(cmd, "@ttl", ttlSeconds);
+        AddParam(cmd, "@limit", limit);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+        }
+        return 0;
+    }
+
+    public async Task<int> CleanupEventsAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
+    {
+        using SqlCommand cmd = new("ssf.cleanup_events", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
+
+        AddParam(cmd, "@queue", queue);
+        AddParam(cmd, "@ttl", ttlSeconds);
+        AddParam(cmd, "@limit", limit);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+        }
+        return 0;
+    }
+
     private static JsonNode? ParseJson(SqlDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal))

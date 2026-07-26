@@ -169,4 +169,36 @@ public interface ISqlFlowDatabase
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A tuple indicating whether the task should suspend its execution, and the event payload if it's already available.</returns>
     Task<(bool ShouldSuspend, JsonNode? Payload)> AwaitEventAsync(DbConnection conn, string queue, string taskId, string runId, string checkpointName, string eventName, int? timeout, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Releases all active claims held by a specific worker, putting the runs and tasks back into a pending state.
+    /// </summary>
+    /// <param name="conn">The database connection to use.</param>
+    /// <param name="queue">The name of the queue.</param>
+    /// <param name="workerId">The identifier of the worker whose claims to release.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task ReleaseWorkerClaimsAsync(DbConnection conn, string queue, string workerId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes old completed, failed, or cancelled tasks and their associated runs/events/checkpoints based on a TTL.
+    /// </summary>
+    /// <param name="conn">The database connection to use.</param>
+    /// <param name="queue">The name of the queue.</param>
+    /// <param name="ttlSeconds">The time-to-live in seconds.</param>
+    /// <param name="limit">The maximum number of records to delete.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The number of records deleted.</returns>
+    Task<int> CleanupTasksAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes old unreferenced events based on a TTL.
+    /// </summary>
+    /// <param name="conn">The database connection to use.</param>
+    /// <param name="queue">The name of the queue.</param>
+    /// <param name="ttlSeconds">The time-to-live in seconds.</param>
+    /// <param name="limit">The maximum number of records to delete.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The number of records deleted.</returns>
+    Task<int> CleanupEventsAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken);
 }

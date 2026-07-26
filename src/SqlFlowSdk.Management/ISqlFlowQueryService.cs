@@ -11,7 +11,7 @@ namespace SqlFlowSdk.Management;
 /// 
 /// Implementations of this interface can be used to build dashboards or monitoring tools for SQL Flow systems.
 /// </summary>
-public interface ISqlFlowManagementService
+public interface ISqlFlowQueryService
 {
     /// <summary>
     /// Gets the current statistics for all task queues in the SQL Flow system. This includes information such as queue names, their states, 

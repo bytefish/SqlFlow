@@ -51,7 +51,8 @@ builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationServic
 
 // Register the SqlFlow SDK
 builder.Services.AddSqlFlowSdk(connectionString);
-builder.Services.AddSqlFlowManagementPostgres(connectionString);
+builder.Services.AddSqlFlowQueryApi(connectionString);
+builder.Services.AddSqlFlowAdminApi(connectionString);
 
 // Configure Workers and Jobs. In this example, we have a queue for AI agents that process tasks related to bug fixing. The
 // worker is configured to handle one task at a time and poll for new tasks every second. The job "solve-bug" is defined
@@ -75,7 +76,9 @@ app.UseCors(CorsPolicyName);
 // Map the SqlFlow Management endpoints for observing, analyzing and managing the workflow system. This
 // provides a web interface to view the status of tasks, queues, and other relevant information about the
 // workflow system.
-app.MapSqlFlowManagementEndpoints();
+app
+    .MapSqlFlowQueryEndpoints()
+    .MapSqlFlowAdminEndpoints();
 
 // A Webhook triggers the Agent, such as a new JIRA ticket or GitHub issue
 app.MapPost("/agent/start", async (ISqlFlow client, [FromBody] AgentTask task, CancellationToken ct) =>

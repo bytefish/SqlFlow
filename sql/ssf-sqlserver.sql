@@ -1044,3 +1044,31 @@ BEGIN
     SELECT @v_deleted_count AS deleted_events;
 END;
 GO
+
+
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
+CREATE OR ALTER PROCEDURE ssf.release_worker_claims
+    @p_queue_name NVARCHAR(57),
+    @p_worker_id NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @v_now DATETIMEOFFSET = ssf.current_time_fn();
+
+    DECLARE @UpdatedTasks TABLE (task_id UNIQUEIDENTIFIER);
+
+    UPDATE ssf.runs
+    SET state = 'pending', claimed_by = NULL, claim_expires_at = NULL, available_at = @v_now
+    OUTPUT inserted.task_id INTO @UpdatedTasks
+    WHERE queue_name = @p_queue_name AND claimed_by = @p_worker_id AND state = 'running';
+
+    UPDATE t
+    SET state = 'pending'
+    FROM ssf.tasks t
+    JOIN @UpdatedTasks u ON t.task_id = u.task_id
+    WHERE t.queue_name = @p_queue_name;
+END;
+GO
