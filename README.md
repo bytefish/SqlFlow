@@ -7,8 +7,7 @@ The SQL Script for creating the SqlFlow Database Schema is available here:
 
 * [https://github.com/bytefish/SqlFlow/blob/main/sql/](https://github.com/bytefish/SqlFlow/blob/main/sql)
 
-It took a large deal of inspiration from Absurd, but it features a simpler database model, 
-that 
+It took a large deal of inspiration from Absurd, but it features a much simpler database model. 
 
 ## 1. Setup ##
 
@@ -50,7 +49,7 @@ Start by creating the `ssf` Database Schema, that holds all required database ob
 * `sql/ssf-postgres.sql`
 * `sql/ssf-sqlserver.sql`
 
-The define an `IJob`, which is going to model an Order Fulfillment Task:
+Then define an `IJob`, which is going to model an Order Fulfillment Task:
 
 ```csharp
 public class FulfillOrderJob : IJob<OrderData, FulfillOrderResult>
