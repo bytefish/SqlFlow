@@ -53,7 +53,7 @@ public static class ServiceCollectionExtensions
         {
             NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
 
-            return new PostgresSqlFlowAdminService(dataSource, sp.GetRequiredService<ISqlFlowDatabase>());
+            return new PostgresSqlFlowAdminService(dataSource, new PostgresFlowDatabase());
         });
 
         return services;

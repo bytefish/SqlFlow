@@ -13,5 +13,6 @@
 
 	<ItemGroup>
 	  <ProjectReference Include="..\SqlFlowSdk.Management\SqlFlowSdk.Management.csproj" />
+	  <ProjectReference Include="..\SqlFlowSdk.SqlServer\SqlFlowSdk.SqlServer.csproj" />
 	</ItemGroup>
 </Project>

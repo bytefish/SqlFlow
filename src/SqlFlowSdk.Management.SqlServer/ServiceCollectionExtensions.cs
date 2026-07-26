@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using SqlFlowSdk.Database;
 using SqlFlowSdk.Management;
 using SqlFlowSdk.Management.SqlServer.Services;
+using SqlFlowSdk.SqlServer.Database;
 using System.Data.Common;
 
 namespace SqlFlowSdk;
@@ -30,7 +31,7 @@ public static class ServiceCollectionExtensions
         {
             var dataSource = SqlClientFactory.Instance.CreateDataSource(connectionString);
 
-            return new SqlServerSqlManagementService(dataSource);
+            return new SqlServerSqlQueryService(dataSource);
         });
 
         return services;
@@ -54,7 +55,7 @@ public static class ServiceCollectionExtensions
         {
             var dataSource = SqlClientFactory.Instance.CreateDataSource(connectionString);
 
-            return new SqlServerSqlFlowAdminService(dataSource, sp.GetRequiredService<ISqlFlowDatabase>());
+            return new SqlServerSqlFlowAdminService(dataSource, new SqlServerFlowDatabase());
         });
 
         return services;

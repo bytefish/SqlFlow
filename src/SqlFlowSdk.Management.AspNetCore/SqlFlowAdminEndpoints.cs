@@ -39,8 +39,7 @@ public static class SqlFlowAdminEndpoints
             .WithName("AdminDropQueue");
 
 
-        // --- TASK INTERVENTIONS ---
-
+        // Task Interventions
         group.MapPost("/tasks/cancel", async (ISqlFlowAdminService admin, [FromBody] CancelTaskCommand req, CancellationToken ct) =>
         {
             await admin.CancelTaskAsync(req, ct);
@@ -55,7 +54,7 @@ public static class SqlFlowAdminEndpoints
         })
             .WithName("AdminBulkCancelTasks");
 
-        // --- WORKER & RUN CONTROL ---
+        // Worker and Run Control
 
         group.MapPost("/workers/release-claims", async (ISqlFlowAdminService admin, [FromBody] ReleaseWorkerClaimsCommand req, CancellationToken ct) =>
         {
@@ -93,7 +92,7 @@ public static class SqlFlowAdminEndpoints
             .WithName("AdminFailRun");
 
 
-        // --- EVENT & CHECKPOINT INTERVENTIONS ---
+        // Event and Checkpoint Interventions
 
         group.MapPost("/events/emit", async (ISqlFlowAdminService admin, [FromBody] EmitEventCommand req, CancellationToken ct) =>
         {
@@ -109,8 +108,7 @@ public static class SqlFlowAdminEndpoints
         })
             .WithName("AdminSetCheckpoint");
 
-
-        // --- CLEANUP & MAINTENANCE ---
+        // Cleanup and Maintenance
 
         group.MapPost("/cleanup/tasks", async (ISqlFlowAdminService admin, [FromBody] CleanupCommand req, CancellationToken ct) =>
         {
