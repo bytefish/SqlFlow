@@ -1,0 +1,29 @@
+<Solution>
+  <Folder Name="/ext/">
+    <Project Path="src/SqlFlowSdk.Management.AspNetCore/SqlFlowSdk.Management.AspNetCore.csproj" />
+    <Project Path="src/SqlFlowSdk.Management.Postgres/SqlFlowSdk.Management.Postgres.csproj" />
+    <Project Path="src/SqlFlowSdk.Management.SqlServer/SqlFlowSdk.Management.SqlServer.csproj" />
+    <Project Path="src/SqlFlowSdk.Management/SqlFlowSdk.Management.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/SqlFlowSdk.AiSample/SqlFlowSdk.AiSample.csproj" />
+    <Project Path="samples/SqlFlowSdk.Sample/SqlFlowSdk.Sample.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="src/Directory.Packages.props" />
+    <File Path="../../LICENSE" />
+    <File Path="../../README.md" />
+    <File Path="../../sql/ssf-postgres.sql" />
+    <File Path="../../sql/ssf-sqlserver.sql" />
+    <File Path="Directory.Build.props" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/SqlFlowSdk.Postgres/SqlFlowSdk.Postgres.csproj" />
+    <Project Path="src/SqlFlowSdk.SqlServer/SqlFlowSdk.SqlServer.csproj" />
+    <Project Path="src/SqlFlowSdk/SqlFlowSdk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SqlFlowSdk.Postgres.Tests/SqlFlowSdk.Postgres.Tests.csproj" />
+    <Project Path="tests/SqlFlowSdk.SqlServer.Tests/SqlFlowSdk.SqlServer.Tests.csproj" />
+  </Folder>
+</Solution>
