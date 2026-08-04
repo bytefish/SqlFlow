@@ -12,9 +12,9 @@
     <description>SqlFlow system for durable workflows (Java 21)</description>
 
     <modules>
-        <module>sqlflow-core</module>
-        <module>sqlflow-postgres</module>
-        <module>sqlflow-sqlserver</module>
+        <module>src/sqlflow-core</module>
+        <module>src/sqlflow-postgres</module>
+        <module>src/sqlflow-sqlserver</module>
     </modules>
 
     <properties>
