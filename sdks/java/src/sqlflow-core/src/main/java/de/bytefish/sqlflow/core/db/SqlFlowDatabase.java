@@ -11,42 +11,29 @@ import java.time.Instant;
 import java.util.List;
 
 public interface SqlFlowDatabase {
+    void createQueue(String queueName);
+    void dropQueue(String queueName);
+    List<String> listQueues();
 
-    void createQueue(Connection conn, String queueName);
+    SpawnResult spawnTask(String queue, String taskName, String paramsJson, String optionsJson);
+    void cancelTask(String queue, String taskId);
+    void emitEvent(String queue, String eventName, String payloadJson);
 
-    void dropQueue(Connection conn, String queueName);
+    List<ClaimedTask> claimTasks(String queue, String workerId, int timeout, int count);
+    void completeRun(String queue, String runId, String resultJson);
+    void failRun(String queue, String runId, String errorJson);
 
-    List<String> listQueues(Connection conn);
+    List<CheckpointRow> getCheckpointStates(String queue, String taskId, String runId);
+    JsonNode getSingleCheckpoint(String queue, String taskId, String checkpointName);
+    void persistCheckpoint(String queue, String taskId, String runId, String checkpointName, String stateJson, int timeout);
 
-    SpawnResult spawnTask(Connection conn, String queue, String taskName, String paramsJson, String optionsJson);
+    void scheduleRun(String queue, String runId, Instant wakeAt);
+    void heartbeat(String queue, String runId, int seconds);
+    EventResult awaitEvent(String queue, String taskId, String runId, String checkpointName, String eventName, Integer timeout);
 
-    void cancelTask(Connection conn, String queue, String taskId);
-
-    void emitEvent(Connection conn, String queue, String eventName, String payloadJson);
-
-    List<ClaimedTask> claimTasks(Connection conn, String queue, String workerId, int timeout, int count);
-
-    void completeRun(Connection conn, String queue, String runId, String resultJson);
-
-    void failRun(Connection conn, String queue, String runId, String errorJson);
-
-    List<CheckpointRow> getCheckpointStates(Connection conn, String queue, String taskId, String runId);
-
-    JsonNode getSingleCheckpoint(Connection conn, String queue, String taskId, String checkpointName);
-
-    void persistCheckpoint(Connection conn, String queue, String taskId, String runId, String checkpointName, String stateJson, int timeout);
-
-    void scheduleRun(Connection conn, String queue, String runId, Instant wakeAt);
-
-    void heartbeat(Connection conn, String queue, String runId, int seconds);
-
-    EventResult awaitEvent(Connection conn, String queue, String taskId, String runId, String checkpointName, String eventName, Integer timeout);
-
-    void releaseWorkerClaims(Connection conn, String queue, String workerId);
-
-    Integer cleanupTasks(Connection conn, String queue, int ttlSeconds, int limit);
-
-    Integer cleanupEvents(Connection conn, String queue, int ttlSeconds, int limit);
+    void releaseWorkerClaims(String queue, String workerId);
+    Integer cleanupTasks(String queue, int ttlSeconds, int limit);
+    Integer cleanupEvents(String queue, int ttlSeconds, int limit);
 
     record EventResult(boolean shouldSuspend, JsonNode payload) {}
 }

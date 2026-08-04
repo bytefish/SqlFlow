@@ -1,4 +1,4 @@
-package de.bytefish.sqlflow.core.functional;
+package de.bytefish.sqlflow.core.infrastructure;
 
 @FunctionalInterface
 public interface JobFactory {
