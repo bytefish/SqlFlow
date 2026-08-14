@@ -1,6 +1,6 @@
 package de.bytefish.sqlflow.core.workers;
 
-import de.bytefish.sqlflow.core.SqlFlow;
+import de.bytefish.sqlflow.core.ISqlFlow;
 import de.bytefish.sqlflow.core.infrastructure.JobFactory;
 import de.bytefish.sqlflow.core.infrastructure.SqlFlowRegistry;
 import org.slf4j.Logger;
@@ -8,13 +8,13 @@ import org.slf4j.LoggerFactory;
 
 public class GenericSqlFlowWorker implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(GenericSqlFlowWorker.class);
-    private final SqlFlow client;
+    private final ISqlFlow client;
     private final SqlFlowRegistry registry;
     private final JobFactory jobFactory;
     private final String queueName;
     private SqlFlowWorker innerWorker;
 
-    public GenericSqlFlowWorker(SqlFlow client, SqlFlowRegistry registry, JobFactory jobFactory, String queueName) {
+    public GenericSqlFlowWorker(ISqlFlow client, SqlFlowRegistry registry, JobFactory jobFactory, String queueName) {
         this.client = client;
         this.registry = registry;
         this.jobFactory = jobFactory;

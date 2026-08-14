@@ -1,6 +1,6 @@
 package de.bytefish.sqlflow.core.infrastructure;
 
-import de.bytefish.sqlflow.core.SqlFlow;
+import de.bytefish.sqlflow.core.ISqlFlow;
 import de.bytefish.sqlflow.core.models.JobRoute;
 import de.bytefish.sqlflow.core.workers.WorkerConfiguration;
 
@@ -17,7 +17,7 @@ public class SqlFlowRegistry {
 
     @FunctionalInterface
     public interface RegistrationDelegate {
-        void register(SqlFlow client, JobFactory factory);
+        void register(ISqlFlow client, JobFactory factory);
     }
 
     public Map<String, JobRoute> getRoutes() {

@@ -1,6 +1,6 @@
 package de.bytefish.sqlflow.core.workers;
 
-import de.bytefish.sqlflow.core.SqlFlow;
+import de.bytefish.sqlflow.core.ISqlFlow;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -16,13 +16,13 @@ import org.slf4j.LoggerFactory;
 public class SqlFlowWorker implements AutoCloseable, Runnable {
     private static final Logger logger = LoggerFactory.getLogger(SqlFlowWorker.class);
 
-    private final SqlFlow client;
+    private final ISqlFlow client;
     private final WorkerOptions options;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
     private final ExecutorService executorService;
     private final Semaphore concurrencyLimiter;
 
-    public SqlFlowWorker(WorkerOptions options, SqlFlow client) {
+    public SqlFlowWorker(WorkerOptions options, ISqlFlow client) {
         this.client = client;
         this.options = options;
         this.concurrencyLimiter = new Semaphore(options.concurrency());
