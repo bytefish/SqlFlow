@@ -44,6 +44,18 @@ public class TaskContext {
         this.claimTimeout = claimTimeout;
     }
 
+    public String getTaskId() {
+        return taskId;
+    }
+
+    public String getRunId() {
+        return task.runId();
+    }
+
+    public int getAttempt() {
+        return task.attempt();
+    }
+
     public static TaskContext create(Logger logger, String taskId, SqlFlowDatabase db,
                                      String queueName, ClaimedTask task, int claimTimeout) {
         List<CheckpointRow> checkpoints = db.getCheckpointStates(queueName, task.taskId(), task.runId());
