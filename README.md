@@ -9,6 +9,25 @@ The SQL Script for creating the SqlFlow Database Schema is available here:
 
 It took a large deal of inspiration from Absurd, but it features a much simpler database model. 
 
+
+# Management, Control Panel and Diagnosing the System Health #
+
+SqlFlow comes with a Management API and a Control Panel to understand you systems health and quickly 
+find out how many tasks are being processed, which tasks are slow, which tasks currently await events, 
+why tasks are failing and search for specific tasks.
+
+
+<a href="https://raw.githubusercontent.com/bytefish/SqlFlow/main/doc/control-panel-event-blockades.jpg">
+    <img src="https://raw.githubusercontent.com/bytefish/SqlFlow/main/doc/control-panel-event-blockades.jpg" alt="Screenshot of Event Blockades within the SqlFlow System" width="100%" />
+</a>
+
+
+It isn't meant to replace your Helm or Grafana dashboards, that also provide alarms and such. Think of it 
+as another tool to observe your system at a much deeper level, than coarse metrics could provide.
+
+
+# Getting Started in .NET #
+
 ## 1. Setup ##
 
 To include SqlFlowSdk in your project, install the NuGet package using the .NET CLI:
@@ -210,22 +229,8 @@ Content-Type: application/json
 }
 ```
 
-## 3. Management, Control Panel and Diagnosing the System Health ##
 
-SqlFlow comes with a Management API and a Control Panel to understand you systems health and quickly 
-find out how many tasks are being processed, which tasks are slow, which tasks currently await events, 
-why tasks are failing and search for specific tasks.
-
-
-<a href="https://raw.githubusercontent.com/bytefish/SqlFlow/main/doc/control-panel-event-blockades.jpg">
-    <img src="https://raw.githubusercontent.com/bytefish/SqlFlow/main/doc/control-panel-event-blockades.jpg" alt="Screenshot of Event Blockades within the SqlFlow System" width="100%" />
-</a>
-
-
-It isn't meant to replace your Helm or Grafana dashboards, that also provide alarms and such. Think of it 
-as another tool to observe your system at a much deeper level, than coarse metrics could provide.
-
-## 4. A more complete application: Durable AI Agents ##
+## 3. A more complete application: Durable AI Agents ##
 
 ### What we are going to build ###
 
