@@ -1,22 +1,17 @@
 package de.bytefish.sqlflow.core;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import de.bytefish.sqlflow.core.db.SqlFlowDatabase;
 import de.bytefish.sqlflow.core.exceptions.CancelledTaskException;
 import de.bytefish.sqlflow.core.exceptions.SuspendTaskException;
-import de.bytefish.sqlflow.core.infrastructure.Job;
-import de.bytefish.sqlflow.core.infrastructure.JobFactory;
 import de.bytefish.sqlflow.core.infrastructure.TaskContext;
 import de.bytefish.sqlflow.core.infrastructure.TaskHandler;
 import de.bytefish.sqlflow.core.models.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -25,23 +20,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * The standard implementation of the ISqlFlow interface.
- * Acts as the orchestrator between the user's high-level API calls and the underlying SqlFlowDatabase.
+ * The core implementation of the ISqlFlow interface.
+ * Operates purely on the functional TaskHandler interface, matching the C# design perfectly.
  */
 public class SqlFlow implements ISqlFlow {
 
     private static final Logger logger = LoggerFactory.getLogger(SqlFlow.class);
 
     private final SqlFlowDatabase db;
-    private final JobFactory jobFactory;
     private final ObjectMapper mapper;
 
-    // Internal registry holding the actual execution wrappers (TaskHandlers) for the registered jobs
+    // Internal registry holding the functional execution wrappers
     private final Map<String, TaskHandler> taskHandlers = new ConcurrentHashMap<>();
 
-    public SqlFlow(SqlFlowDatabase db, JobFactory jobFactory, ObjectMapper mapper) {
+    public SqlFlow(SqlFlowDatabase db, ObjectMapper mapper) {
         this.db = db;
-        this.jobFactory = jobFactory;
         this.mapper = mapper;
     }
 
@@ -61,30 +54,19 @@ public class SqlFlow implements ISqlFlow {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
-    public <TParams, TResult> void registerTask(TaskRegistrationOptions options, Class<? extends Job<TParams, TResult>> jobClass) {
-        Class<?> paramType = extractParamType(jobClass);
-
-        // Hier entsteht die Magie von "Weg A": Der TaskHandler transformiert das DB-Format
-        // in das von dir definierte Java-Record, bevor der Job gestartet wird.
-        taskHandlers.put(options.name(), (ctx, paramsNode) -> {
-            Job<TParams, TResult> job = (Job<TParams, TResult>) jobFactory.getJob(jobClass);
-
-            TParams typedParams = null;
-            if (paramsNode != null && !paramsNode.isNull()) {
-                typedParams = (TParams) mapper.convertValue(paramsNode, paramType);
-            }
-
-            return job.execute(ctx, typedParams);
-        });
+    public void registerTask(TaskRegistrationOptions options, TaskHandler handler) {
+        if (options.name() == null || options.name().isEmpty()) {
+            throw new IllegalArgumentException("Task registration requires a name");
+        }
+        taskHandlers.put(options.name(), handler);
     }
 
     @Override
-    public <TRequest> SpawnResult spawn(SpawnOptions options, String jobName, TRequest request) {
+    public <TRequest> SpawnResult spawn(SpawnOptions options, String taskName, TRequest request) {
         try {
             String paramsJson = mapper.writeValueAsString(request);
             String optionsJson = mapper.writeValueAsString(options);
-            return db.spawnTask(options.queue(), jobName, paramsJson, optionsJson);
+            return db.spawnTask(options.queue(), taskName, paramsJson, optionsJson);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize spawn request", e);
         }
@@ -92,6 +74,9 @@ public class SqlFlow implements ISqlFlow {
 
     @Override
     public void emitEvent(EmitEventOptions options, String eventName, Object payload) {
+        if (eventName == null || eventName.isEmpty()) {
+            throw new IllegalArgumentException("eventName required");
+        }
         try {
             String payloadJson = mapper.writeValueAsString(payload);
             db.emitEvent(options.queue(), eventName, payloadJson);
@@ -107,6 +92,9 @@ public class SqlFlow implements ISqlFlow {
 
     @Override
     public List<ClaimedTask> claimTasks(String queue, String workerId, int claimTimeout, int batchSize) {
+        if (queue == null || queue.isEmpty()) {
+            throw new IllegalArgumentException("Queue must be specified for claiming tasks");
+        }
         return db.claimTasks(queue, workerId, claimTimeout, batchSize);
     }
 
@@ -142,7 +130,7 @@ public class SqlFlow implements ISqlFlow {
                 try {
                     return handler.handle(ctx, task.params());
                 } catch (RuntimeException e) {
-                    throw e;
+                    throw e; // Propagate directly
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -166,7 +154,7 @@ public class SqlFlow implements ISqlFlow {
             }
 
             if (cause instanceof SuspendTaskException || cause instanceof CancelledTaskException) {
-                return;
+                return; // Expected control-flow exception (suspending thread)
             }
 
             if (cause instanceof TimeoutException) {
@@ -191,19 +179,5 @@ public class SqlFlow implements ISqlFlow {
                 logger.error("Failed to mark run as failed: {}", failErr.getMessage());
             }
         }
-    }
-
-    private Class<?> extractParamType(Class<?> jobClass) {
-        for (Type interfaceType : jobClass.getGenericInterfaces()) {
-            if (interfaceType instanceof ParameterizedType parameterizedType) {
-                if (parameterizedType.getRawType().equals(Job.class)) {
-                    Type paramType = parameterizedType.getActualTypeArguments()[0];
-                    if (paramType instanceof Class) {
-                        return (Class<?>) paramType;
-                    }
-                }
-            }
-        }
-        return JsonNode.class;
     }
 }
