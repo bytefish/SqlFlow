@@ -9,7 +9,6 @@ namespace SqlFlowSdk.Extensions;
 
 public static class SqlFlowExtensions
 {
-    // Die elegante Erweiterung, die Dependency Injection mit dem Core-Client verheiratet
     public static void UseJob<TJob, TParams, TResult>(
         this ISqlFlow client,
         IServiceProvider provider,
