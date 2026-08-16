@@ -22,6 +22,7 @@ public class DefaultLlmService implements LlmService {
                 : "// AI: Simple Fix for the NullReferenceException\nif(data == null) return;";
 
         logger.info("LLM has generated a potential fix: \n{}", code);
+
         return new Solution(code);
     }
 }

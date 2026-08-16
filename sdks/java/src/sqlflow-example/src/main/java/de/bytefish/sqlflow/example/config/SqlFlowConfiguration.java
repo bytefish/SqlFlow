@@ -25,7 +25,7 @@ public class SqlFlowConfiguration {
     @Bean(destroyMethod = "stop")
     public PostgreSQLContainer<?> postgresContainer() {
         PostgreSQLContainer<?> postgres =
-                new PostgreSQLContainer<>("postgres:15-alpine")
+                new PostgreSQLContainer<>("postgres:18")
                         .withInitScript("ssf-postgres.sql");
 
         postgres.start();

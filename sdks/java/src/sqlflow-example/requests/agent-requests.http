@@ -1,0 +1,64 @@
+@baseUrl = http://localhost:5000
+@issueId = 12345
+@delayMs = 15000
+
+### Start the Agent Job
+# @name startAgent
+POST {{baseUrl}}/agent/start
+Content-Type: application/json
+
+{
+  "issue_id": "{{issueId}}"
+}
+
+> {%
+    let body = response.body;
+    if (typeof body === "string") {
+        body = JSON.parse(body);
+    }
+
+    client.test("Agent was started", function () {
+        client.assert(response.status === 200, "Expected HTTP 200");
+        client.assert(body.taskId, "Response does not contain taskId");
+    });
+
+    client.global.set("taskId", body.taskId);
+    client.log("Stored taskId: " + body.taskId);
+%}
+
+### Reject the first attempt after a delay
+< {%
+    // Directly use the evaluated template variable or fallback to 15000
+    await sleep(parseInt("{{delayMs}}") || 15000);
+%}
+POST {{baseUrl}}/agent/review/{{issueId}}/{{taskId}}-attempt-1
+Content-Type: application/json
+
+{
+  "approved": false,
+  "reason": "This is way too simple, add a better error handling strategy!"
+}
+
+> {%
+    client.test("First review was submitted", function () {
+        client.assert(response.status === 200, "Expected HTTP 200");
+    });
+%}
+
+### Approve the second attempt after another delay
+< {%
+    await sleep(parseInt("{{delayMs}}") || 15000);
+%}
+POST {{baseUrl}}/agent/review/{{issueId}}/{{taskId}}-attempt-2
+Content-Type: application/json
+
+{
+  "approved": true,
+  "reason": "Now, this looks good!"
+}
+
+> {%
+    client.test("Second review was submitted", function () {
+        client.assert(response.status === 200, "Expected HTTP 200");
+    });
+%}
