@@ -4,7 +4,7 @@ import random
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 # Import the SDK
@@ -119,7 +119,7 @@ async def autonomous_agent_workflow(ctx: TaskContext, params: dict) -> dict:
 
     while not is_approved and attempt < 3:
         attempt += 1
-        correlation_id = f"attempt-{attempt}"
+        correlation_id = f"{ctx.task_id}-attempt-{attempt}"
         
         logger.info(f"Attempt {attempt}/3: Generating a fix based on: {last_feedback}")
 
@@ -223,6 +223,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+
+@app.post("/debug/inspect")
+async def debug_inspect(request: Request):
+    raw_body = await request.body()
+    print(f"RAW BODY RECEIVED: {raw_body}")
+    return {"received_bytes": len(raw_body)}
+
 @app.post("/agent/start")
 async def start_agent(task: AgentTask):
     """A Webhook triggers the Agent, such as a new JIRA ticket or GitHub issue."""
@@ -236,6 +243,7 @@ async def start_agent(task: AgentTask):
     
     return {
         "run_id": result.run_id, 
+        "task_id": result.task_id,
         "status": f"Agent dispatched to fix Issue #{task.issue_id}"
     }
 

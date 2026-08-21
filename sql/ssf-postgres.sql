@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS ssf.tasks (
     state VARCHAR(50) NOT NULL CONSTRAINT chk_task_state CHECK (state IN ('pending', 'running', 'sleeping', 'completed', 'failed', 'cancelled')),
     attempts INT NOT NULL DEFAULT 0,
     last_attempt_run UUID,
-    completed_payload TEXT,
+    completed_payload JSONB,
     cancelled_at TIMESTAMPTZ,
     idempotency_key VARCHAR(450),
     
@@ -108,11 +108,11 @@ CREATE TABLE IF NOT EXISTS ssf.runs (
     claim_expires_at TIMESTAMPTZ,
     available_at TIMESTAMPTZ NOT NULL,
     wake_event TEXT,
-    event_payload TEXT,
+    event_payload JSONB,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     failed_at TIMESTAMPTZ,
-    result TEXT,
+    result JSONB,
     failure_reason JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
     
@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS ssf.checkpoints (
     queue_name VARCHAR(57) NOT NULL,
     task_id UUID NOT NULL,
     checkpoint_name VARCHAR(450) NOT NULL,
-    state TEXT,
+    state JSONB,
     status VARCHAR(50) NOT NULL DEFAULT 'committed',
     owner_run_id UUID,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS ssf.checkpoints (
 CREATE TABLE IF NOT EXISTS ssf.events (
     queue_name VARCHAR(57) NOT NULL,
     event_name VARCHAR(450) NOT NULL,
-    payload TEXT,
+    payload JSONB,
     emitted_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
     
     PRIMARY KEY (queue_name, event_name)
@@ -298,7 +298,7 @@ RETURNS TABLE (
     max_attempts INT,
     headers JSONB,
     wake_event TEXT,
-    event_payload TEXT
+    event_payload JSONB
 )
 LANGUAGE plpgsql
 AS $$
@@ -364,7 +364,7 @@ $$;
 CREATE OR REPLACE PROCEDURE ssf.complete_run(
     p_queue_name TEXT,
     p_run_id UUID,
-    p_state TEXT DEFAULT NULL
+    p_state JSONB DEFAULT NULL
 )
 LANGUAGE plpgsql
 AS $$
@@ -559,7 +559,7 @@ CREATE OR REPLACE PROCEDURE ssf.set_task_checkpoint_state(
     p_queue_name TEXT,
     p_task_id UUID,
     p_step_name TEXT,
-    p_state TEXT,
+    p_state JSONB,
     p_owner_run UUID,
     p_extend_claim_by INT DEFAULT NULL
 )
@@ -653,7 +653,7 @@ CREATE OR REPLACE FUNCTION ssf.get_task_checkpoint_state(
 )
 RETURNS TABLE (
     checkpoint_name VARCHAR(450),
-    state TEXT,
+    state JSONB,
     status VARCHAR(50),
     owner_run_id UUID,
     updated_at TIMESTAMPTZ
@@ -679,7 +679,7 @@ CREATE OR REPLACE FUNCTION ssf.get_task_checkpoint_states(
 )
 RETURNS TABLE (
     checkpoint_name VARCHAR(450),
-    state TEXT,
+    state JSONB,
     status VARCHAR(50),
     owner_run_id UUID,
     updated_at TIMESTAMPTZ
@@ -720,7 +720,7 @@ CREATE OR REPLACE FUNCTION ssf.await_event(
 )
 RETURNS TABLE (
     should_suspend BOOLEAN,
-    payload TEXT
+    payload JSONB
 )
 LANGUAGE plpgsql
 AS $$
@@ -728,12 +728,12 @@ DECLARE
     v_now TIMESTAMPTZ := ssf.current_time_fn();
     v_timeout_at TIMESTAMPTZ := NULL;
     v_run_state VARCHAR(50);
-    v_existing_payload TEXT;
+    v_existing_payload JSONB;
     v_wake_event TEXT;
     v_task_state VARCHAR(50);
-    v_checkpoint_payload TEXT;
-    v_event_payload TEXT;
-    v_resolved_payload TEXT;
+    v_checkpoint_payload JSONB;
+    v_event_payload JSONB;
+    v_resolved_payload JSONB;
     v_dummy INT;
 BEGIN
     IF p_event_name IS NULL OR length(trim(p_event_name)) = 0 THEN
@@ -800,7 +800,7 @@ BEGIN
 
     IF v_resolved_payload IS NULL AND v_wake_event = p_event_name AND v_existing_payload IS NULL THEN
         UPDATE ssf.runs SET wake_event = NULL WHERE queue_name = p_queue_name AND run_id = p_run_id;
-        RETURN QUERY SELECT FALSE, NULL::TEXT;
+        RETURN QUERY SELECT FALSE, NULL::JSONB
         RETURN;
     END IF;
 
@@ -817,7 +817,7 @@ BEGIN
 
     UPDATE ssf.tasks SET state = 'sleeping' WHERE queue_name = p_queue_name AND task_id = p_task_id;
 
-    RETURN QUERY SELECT TRUE, NULL::TEXT;
+    RETURN QUERY SELECT TRUE, NULL::JSONB;
 END;
 $$;
 
@@ -825,13 +825,13 @@ $$;
 CREATE OR REPLACE PROCEDURE ssf.emit_event(
     p_queue_name TEXT,
     p_event_name TEXT,
-    p_payload TEXT DEFAULT NULL
+    p_payload JSONB DEFAULT 'null'::jsonb
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_now TIMESTAMPTZ := ssf.current_time_fn();
-    v_payload TEXT := COALESCE(p_payload, 'null');
+    v_payload JSONB := COALESCE(p_payload, 'null'::jsonb);
     v_emit_applied INT;
 BEGIN
     IF p_event_name IS NULL OR length(trim(p_event_name)) = 0 THEN

@@ -13,6 +13,15 @@ from sqlflow.sdk import DatabaseDriver, SpawnResult
 
 logger = logging.getLogger("sqlflow.postgres")
 
+async def _init_connection(conn):
+    await conn.set_type_codec(
+        "jsonb",
+        schema="pg_catalog",
+        encoder=json.dumps,
+        decoder=json.loads,
+        format="text"
+    )
+
 class PostgresDriver(DatabaseDriver):
     """
     PostgreSQL implementation of the SqlFlow DatabaseDriver using asyncpg.
@@ -30,7 +39,7 @@ class PostgresDriver(DatabaseDriver):
     async def connect(self) -> None:
         """Initializes the async connection pool."""
         if not self._pool:
-            self._pool = await asyncpg.create_pool(self.dsn)
+            self._pool = await asyncpg.create_pool(self.dsn, init=_init_connection)
             logger.info("PostgreSQL connection pool created.")
 
     async def disconnect(self) -> None:
@@ -54,16 +63,13 @@ class PostgresDriver(DatabaseDriver):
 
     async def spawn_task(self, p_queue_name: str, p_task_name: str, p_params: Any, p_options: Any) -> SpawnResult:
         pool = self._ensure_pool()
-        # Ensure dicts/objects are serialized to strings before casting to JSONB in Postgres
-        params_str = p_params if isinstance(p_params, str) else json.dumps(p_params)
-        options_str = p_options if isinstance(p_options, str) else json.dumps(p_options)
-        
+
         row = await pool.fetchrow(
             """
             SELECT task_id, run_id, attempt, created 
             FROM ssf.spawn_task($1, $2, $3::jsonb, $4::jsonb)
             """,
-            p_queue_name, p_task_name, params_str, options_str
+            p_queue_name, p_task_name, p_params, p_options
         )
         
         if not row:
@@ -84,10 +90,10 @@ class PostgresDriver(DatabaseDriver):
         )
         return [dict(row) for row in rows]
 
-    async def complete_run(self, p_queue_name: str, p_run_id: UUID, p_state: str) -> None:
+    async def complete_run(self, p_queue_name: str, p_run_id: UUID, p_state: Any) -> None:
         pool = self._ensure_pool()
         await pool.execute(
-            "CALL ssf.complete_run($1, $2, $3)",
+            "CALL ssf.complete_run($1, $2, $3::jsonb)",
             p_queue_name, p_run_id, p_state
         )
 
@@ -100,13 +106,12 @@ class PostgresDriver(DatabaseDriver):
 
     async def fail_run(self, p_queue_name: str, p_run_id: UUID, p_reason: Any, p_retry_at: datetime) -> None:
         pool = self._ensure_pool()
-        reason_str = p_reason if isinstance(p_reason, str) else json.dumps(p_reason)
         await pool.execute(
             "CALL ssf.fail_run($1, $2, $3::jsonb, $4)",
-            p_queue_name, p_run_id, reason_str, p_retry_at
+            p_queue_name, p_run_id, p_reason, p_retry_at
         )
 
-    async def set_task_checkpoint_state(self, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_state: str, p_owner_run: UUID, p_extend_claim_by: int) -> None:
+    async def set_task_checkpoint_state(self, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_state: Any, p_owner_run: UUID, p_extend_claim_by: int) -> None:
         pool = self._ensure_pool()
         await pool.execute(
             "CALL ssf.set_task_checkpoint_state($1, $2, $3, $4, $5, $6)",
@@ -131,10 +136,10 @@ class PostgresDriver(DatabaseDriver):
             raise RuntimeError("Database error: await_event returned no state.")
         return dict(row)
 
-    async def emit_event(self, p_queue_name: str, p_event_name: str, p_payload: str) -> None:
-        pool = self._ensure_pool()
+    async def emit_event(self, p_queue_name: str, p_event_name: str, p_payload: Any) -> None:
+        pool = self._ensure_pool()           
         await pool.execute(
-            "CALL ssf.emit_event($1, $2, $3)",
+            "CALL ssf.emit_event($1, $2, $3::jsonb)",
             p_queue_name, p_event_name, p_payload
         )
 
@@ -144,3 +149,4 @@ class PostgresDriver(DatabaseDriver):
             "CALL ssf.cancel_task($1, $2)",
             p_queue_name, p_task_id
         )
+            

@@ -78,7 +78,7 @@ class DatabaseDriver(ABC):
         pass
 
     @abstractmethod
-    async def complete_run(self, p_queue_name: str, p_run_id: UUID, p_state: str) -> None:
+    async def complete_run(self, p_queue_name: str, p_run_id: UUID, p_state: Any) -> None:
         """CALL ssf.complete_run(p_queue_name TEXT, p_run_id UUID, p_state TEXT)"""
         pass
 
@@ -93,8 +93,8 @@ class DatabaseDriver(ABC):
         pass
 
     @abstractmethod
-    async def set_task_checkpoint_state(self, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_state: str, p_owner_run: UUID, p_extend_claim_by: int) -> None:
-        """CALL ssf.set_task_checkpoint_state(p_queue_name TEXT, p_task_id UUID, p_step_name TEXT, p_state TEXT, p_owner_run UUID, p_extend_claim_by INT)"""
+    async def set_task_checkpoint_state(self, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_state: Any, p_owner_run: UUID, p_extend_claim_by: int) -> None:
+        """CALL ssf.set_task_checkpoint_state(p_queue_name TEXT, p_task_id UUID, p_step_name TEXT, p_state ANY, p_owner_run UUID, p_extend_claim_by INT)"""
         pass
 
     @abstractmethod
@@ -108,7 +108,7 @@ class DatabaseDriver(ABC):
         pass
 
     @abstractmethod
-    async def emit_event(self, p_queue_name: str, p_event_name: str, p_payload: str) -> None:
+    async def emit_event(self, p_queue_name: str, p_event_name: str, p_payload: Any) -> None:
         """CALL ssf.emit_event(p_queue_name TEXT, p_event_name TEXT, p_payload TEXT)"""
         pass
 
@@ -142,7 +142,7 @@ class TaskContext:
         
         # If already completed in a previous run, return saved state immediately
         if state_row and state_row.get("state") is not None:
-            return json.loads(state_row["state"])
+            return state_row["state"]
 
         # Execute the action (supports both sync and async functions)
         if asyncio.iscoroutinefunction(action):
@@ -151,12 +151,11 @@ class TaskContext:
             result = action()
 
         # Serialize and checkpoint the result
-        serialized_result = json.dumps(result)
         await self._db.set_task_checkpoint_state(
             p_queue_name=self._queue_name,
             p_task_id=self.task_id,
             p_step_name=step_name,
-            p_state=serialized_result,
+            p_state=result,
             p_owner_run=self.run_id,
             p_extend_claim_by=0 # Handled by worker heartbeat normally
         )
@@ -264,8 +263,7 @@ class Worker:
         task_name = task_row["task_name"]
         
         # Parse params safely
-        raw_params = task_row.get("params", "{}")
-        params = json.loads(raw_params) if raw_params else {}
+        params = task_row.get("params", {})
 
         # Ensure task is registered
         if task_name not in self._registry:
@@ -273,7 +271,7 @@ class Worker:
             await self._db.fail_run(
                 p_queue_name=self._options.queue_name,
                 p_run_id=run_id,
-                p_reason=json.dumps({"error": f"Task {task_name} not registered"}),
+                p_reason={"error": f"Task {task_name} not registered"},
                 p_retry_at=datetime.now(timezone.utc) + timedelta(minutes=5)
             )
             return
@@ -307,12 +305,6 @@ class Worker:
             # We just need to mark the run itself as suspended/yielded so the claim lock is 
             # released.
             logger.info(f"Task {task_id} suspended: {e}")
-            
-            await self._db.complete_run(
-                p_queue_name=self._options.queue_name,
-                p_run_id=run_id,
-                p_state="suspended"
-            )
 
         except Exception as e:
             # Unhandled Exception: Fail the run and schedule a retry
@@ -328,7 +320,7 @@ class Worker:
             await self._db.fail_run(
                 p_queue_name=self._options.queue_name,
                 p_run_id=run_id,
-                p_reason=json.dumps(error_details),
+                p_reason=error_details,
                 p_retry_at=retry_at
             )
 
@@ -354,8 +346,8 @@ class SqlFlow:
         return await self._db.spawn_task(
             p_queue_name=options.queue_name,
             p_task_name=task_name,
-            p_params=json.dumps(params) if params else "{}",
-            p_options=json.dumps(options.model_dump(exclude_none=True))
+            p_params=params if params else {},
+            p_options=options.model_dump(exclude_none=True)
         )
 
     async def emit_event(self, options: EmitEventOptions, event_name: str, payload: Any = None) -> None:
@@ -363,7 +355,7 @@ class SqlFlow:
         await self._db.emit_event(
             p_queue_name=options.queue_name,
             p_event_name=event_name,
-            p_payload=json.dumps(payload) if payload else "{}"
+            p_payload=payload if payload else {}
         )
 
     async def cancel_task(self, options: CancelTaskOptions, task_id: UUID) -> None:
