@@ -223,13 +223,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
-@app.post("/debug/inspect")
-async def debug_inspect(request: Request):
-    raw_body = await request.body()
-    print(f"RAW BODY RECEIVED: {raw_body}")
-    return {"received_bytes": len(raw_body)}
-
 @app.post("/agent/start")
 async def start_agent(task: AgentTask):
     """A Webhook triggers the Agent, such as a new JIRA ticket or GitHub issue."""
