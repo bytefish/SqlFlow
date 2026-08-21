@@ -190,7 +190,7 @@ async def lifespan(app: FastAPI):
     """Lifecycle manager for the FastAPI application."""
     global db_driver, sqlflow_client, worker
     
-    connection_string = "postgresql://postgres:password@127.0.0.1:5432/abdurd_db"
+    connection_string = "postgresql://postgres:password@127.0.0.1:5432/sqlflow_db"
     
     db_driver = PostgresDriver(connection_string)
 
