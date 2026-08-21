@@ -10,8 +10,3 @@ services:
       - "5432:5432"
     volumes:
       - "../sql/ssf-postgres.sql:/docker-entrypoint-initdb.d/ssf-postgres.sql"
-    healthcheck:
-      test: ["CMD-SHELL", "psql -U postgis -d routing_db -c 'SELECT postgis_full_version();' || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
