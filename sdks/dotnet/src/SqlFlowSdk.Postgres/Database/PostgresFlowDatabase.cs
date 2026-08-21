@@ -1,4 +1,5 @@
 ﻿using Npgsql;
+using NpgsqlTypes;
 using SqlFlowSdk.Core;
 using SqlFlowSdk.Exceptions;
 using System.Data;
@@ -18,7 +19,7 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     {
         using NpgsqlCommand cmd = new("CALL ssf.create_queue(@p_queue_name, 'unpartitioned')", (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queueName);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queueName);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -27,7 +28,7 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     {
         using NpgsqlCommand cmd = new("CALL ssf.drop_queue(@p_queue_name)", (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queueName);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queueName);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -53,10 +54,10 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         string sql = "SELECT task_id, run_id, attempt FROM ssf.spawn_task(@p_queue_name, @p_task_name, @p_params::jsonb, @p_options::jsonb)";
         using NpgsqlCommand cmd = new(sql, (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_task_name", taskName);
-        AddParam(cmd, "@p_params", paramsJson);
-        AddParam(cmd, "@p_options", optionsJson);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_task_name", NpgsqlDbType.Text, taskName);
+        AddParam(cmd, "@p_params", NpgsqlDbType.Jsonb, paramsJson);
+        AddParam(cmd, "@p_options", NpgsqlDbType.Jsonb, optionsJson);
 
         using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -76,8 +77,8 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     {
         using NpgsqlCommand cmd = new("CALL ssf.cancel_task(@p_queue_name, @p_task_id)", (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -86,9 +87,9 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     {
         using NpgsqlCommand cmd = new("CALL ssf.emit_event(@p_queue_name, @p_event_name, @p_payload)", (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_event_name", eventName);
-        AddParam(cmd, "@p_payload", payloadJson);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_event_name", NpgsqlDbType.Text, eventName);
+        AddParam(cmd, "@p_payload", NpgsqlDbType.Jsonb, payloadJson);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -102,10 +103,10 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
         using NpgsqlCommand cmd = new(sql, (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_worker_id", workerId);
-        AddParam(cmd, "@p_claim_timeout", timeout);
-        AddParam(cmd, "@p_qty", count);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_worker_id", NpgsqlDbType.Text, workerId);
+        AddParam(cmd, "@p_claim_timeout", NpgsqlDbType.Integer, timeout);
+        AddParam(cmd, "@p_qty", NpgsqlDbType.Integer, count);
 
         using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -133,9 +134,9 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     {
         using NpgsqlCommand cmd = new("CALL ssf.complete_run(@p_queue_name, @p_run_id, @p_state)", (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_run_id", Guid.Parse(runId));
-        AddParam(cmd, "@p_state", resultJson);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
+        AddParam(cmd, "@p_state", NpgsqlDbType.Jsonb, resultJson);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -144,10 +145,10 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     {
         using NpgsqlCommand cmd = new("CALL ssf.fail_run(@p_queue_name, @p_run_id, @p_reason::jsonb, @p_retry_at)", (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_run_id", Guid.Parse(runId));
-        AddParam(cmd, "@p_reason", errorJson);
-        AddParam(cmd, "@p_retry_at", DBNull.Value); // Kann optional als UTC DateTime übergeben werden
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
+        AddParam(cmd, "@p_reason", NpgsqlDbType.Jsonb, errorJson);
+        AddParam(cmd, "@p_retry_at", NpgsqlDbType.TimestampTz, DBNull.Value); // Kann optional als UTC DateTime übergeben werden
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -160,9 +161,9 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
                      "FROM ssf.get_task_checkpoint_states(@p_queue_name, @p_task_id, @p_run_id)";
         using NpgsqlCommand cmd = new(sql, (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
-        AddParam(cmd, "@p_run_id", Guid.Parse(runId));
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
+        AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
 
         using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -187,10 +188,10 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
         using NpgsqlCommand cmd = new(sql, (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
-        AddParam(cmd, "@p_step_name", checkpointName);
-        AddParam(cmd, "@p_include_pending", 0);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
+        AddParam(cmd, "@p_step_name", NpgsqlDbType.Text, checkpointName);
+        AddParam(cmd, "@p_include_pending", NpgsqlDbType.Integer, 0);
 
         using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -208,12 +209,12 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         {
             using NpgsqlCommand cmd = new("CALL ssf.set_task_checkpoint_state(@p_queue_name, @p_task_id, @p_step_name, @p_state, @p_owner_run, @p_extend_claim_by)", (NpgsqlConnection)conn);
 
-            AddParam(cmd, "@p_queue_name", queue);
-            AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
-            AddParam(cmd, "@p_step_name", checkpointName);
-            AddParam(cmd, "@p_state", stateJson);
-            AddParam(cmd, "@p_owner_run", Guid.Parse(runId));
-            AddParam(cmd, "@p_extend_claim_by", timeout);
+            AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+            AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
+            AddParam(cmd, "@p_step_name", NpgsqlDbType.Text, checkpointName);
+            AddParam(cmd, "@p_state", NpgsqlDbType.Jsonb, stateJson);
+            AddParam(cmd, "@p_owner_run", NpgsqlDbType.Uuid, Guid.Parse(runId));
+            AddParam(cmd, "@p_extend_claim_by", NpgsqlDbType.Integer, timeout);
 
             return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }, cancellationToken);
@@ -223,9 +224,9 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     {
         using NpgsqlCommand cmd = new("CALL ssf.schedule_run(@p_queue_name, @p_run_id, @p_wake_at)", (NpgsqlConnection)conn);
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_run_id", Guid.Parse(runId));
-        AddParam(cmd, "@p_wake_at", wakeAt.Kind == DateTimeKind.Utc ? wakeAt : wakeAt.ToUniversalTime());
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
+        AddParam(cmd, "@p_wake_at", NpgsqlDbType.TimestampTz, wakeAt.Kind == DateTimeKind.Utc ? wakeAt : wakeAt.ToUniversalTime());
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -236,9 +237,9 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         {
             using NpgsqlCommand cmd = new("CALL ssf.extend_claim(@p_queue_name, @p_run_id, @p_extend_by)", (NpgsqlConnection)conn);
 
-            AddParam(cmd, "@p_queue_name", queue);
-            AddParam(cmd, "@p_run_id", Guid.Parse(runId));
-            AddParam(cmd, "@p_extend_by", seconds);
+            AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+            AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
+            AddParam(cmd, "@p_extend_by", NpgsqlDbType.Integer, seconds);
 
             return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }, cancellationToken);
@@ -252,12 +253,12 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
             using NpgsqlCommand cmd = new(sql, (NpgsqlConnection)conn);
 
-            AddParam(cmd, "@p_queue_name", queue);
-            AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
-            AddParam(cmd, "@p_run_id", Guid.Parse(runId));
-            AddParam(cmd, "@p_step_name", checkpointName);
-            AddParam(cmd, "@p_event_name", eventName);
-            AddParam(cmd, "@p_timeout", timeout);
+            AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+            AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
+            AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
+            AddParam(cmd, "@p_step_name", NpgsqlDbType.Text, checkpointName);
+            AddParam(cmd, "@p_event_name", NpgsqlDbType.Text, eventName);
+            AddParam(cmd, "@p_timeout", NpgsqlDbType.Integer, timeout);
 
             using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
@@ -282,8 +283,8 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
         cmd.CommandText = sql;
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_worker_id", workerId);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_worker_id", NpgsqlDbType.Text, workerId);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -297,9 +298,9 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
         cmd.CommandText = sql;
         
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_ttl_seconds", ttlSeconds);
-        AddParam(cmd, "@p_limit", limit);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_ttl_seconds", NpgsqlDbType.Integer, ttlSeconds);
+        AddParam(cmd, "@p_limit", NpgsqlDbType.Integer, limit);
 
         object? result = await cmd.ExecuteScalarAsync(cancellationToken);
 
@@ -314,9 +315,9 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
         cmd.CommandText = sql;
 
-        AddParam(cmd, "@p_queue_name", queue);
-        AddParam(cmd, "@p_ttl_seconds", ttlSeconds);
-        AddParam(cmd, "@p_limit", limit);
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
+        AddParam(cmd, "@p_ttl_seconds", NpgsqlDbType.Integer, ttlSeconds);
+        AddParam(cmd, "@p_limit", NpgsqlDbType.Integer, limit);
 
         object? result = await cmd.ExecuteScalarAsync(cancellationToken);
 
@@ -345,8 +346,8 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         }
     }
 
-    private void AddParam(NpgsqlCommand cmd, string name, object? value)
+    private void AddParam(NpgsqlCommand cmd, string name, NpgsqlDbType dbType, object? value)
     {
-        cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(name, dbType, value ?? DBNull.Value);
     }
 }
