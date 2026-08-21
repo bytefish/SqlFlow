@@ -88,14 +88,14 @@ CREATE TABLE IF NOT EXISTS ssf.tasks (
     state VARCHAR(50) NOT NULL CONSTRAINT chk_task_state CHECK (state IN ('pending', 'running', 'sleeping', 'completed', 'failed', 'cancelled')),
     attempts INT NOT NULL DEFAULT 0,
     last_attempt_run UUID,
-    completed_payload TEXT,
+    completed_payload JSONB,
     cancelled_at TIMESTAMPTZ,
     idempotency_key VARCHAR(450),
-    
+
     PRIMARY KEY (queue_name, task_id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_ssf_tasks_idempotency 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ssf_tasks_idempotency
     ON ssf.tasks (queue_name, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ssf.runs (
@@ -108,14 +108,14 @@ CREATE TABLE IF NOT EXISTS ssf.runs (
     claim_expires_at TIMESTAMPTZ,
     available_at TIMESTAMPTZ NOT NULL,
     wake_event TEXT,
-    event_payload TEXT,
+    event_payload JSONB,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     failed_at TIMESTAMPTZ,
-    result TEXT,
+    result JSONB,
     failure_reason JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
-    
+
     PRIMARY KEY (queue_name, run_id)
 );
 
@@ -126,20 +126,20 @@ CREATE TABLE IF NOT EXISTS ssf.checkpoints (
     queue_name VARCHAR(57) NOT NULL,
     task_id UUID NOT NULL,
     checkpoint_name VARCHAR(450) NOT NULL,
-    state TEXT,
+    state JSONB,
     status VARCHAR(50) NOT NULL DEFAULT 'committed',
     owner_run_id UUID,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
-    
+
     PRIMARY KEY (queue_name, task_id, checkpoint_name)
 );
 
 CREATE TABLE IF NOT EXISTS ssf.events (
     queue_name VARCHAR(57) NOT NULL,
     event_name VARCHAR(450) NOT NULL,
-    payload TEXT,
+    payload JSONB,
     emitted_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
-    
+
     PRIMARY KEY (queue_name, event_name)
 );
 
@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS ssf.waits (
     event_name VARCHAR(450) NOT NULL,
     timeout_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
-    
+
     PRIMARY KEY (queue_name, run_id, step_name)
 );
 
@@ -235,17 +235,17 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_task_id UUID := gen_random_uuid(); 
+    v_task_id UUID := gen_random_uuid();
     v_run_id UUID := gen_random_uuid();
     v_attempt INT := 1;
     v_now TIMESTAMPTZ := ssf.current_time_fn();
-    
+
     v_headers JSONB := p_options->'headers';
     v_retry_strategy JSONB := p_options->'retry_strategy';
     v_max_attempts INT := (p_options->>'max_attempts')::INT;
     v_cancellation JSONB := p_options->'cancellation';
     v_idempotency_key VARCHAR(450) := p_options->>'idempotency_key';
-    
+
     v_existing_task_id UUID;
     v_existing_run_id UUID;
     v_existing_attempt INT;
@@ -259,12 +259,12 @@ BEGIN
             INSERT INTO ssf.tasks (queue_name, task_id, task_name, params, headers, retry_strategy, max_attempts, cancellation, enqueue_at, state, attempts, last_attempt_run, idempotency_key)
             VALUES (p_queue_name, v_task_id, p_task_name, p_params, v_headers, v_retry_strategy, v_max_attempts, v_cancellation, v_now, 'pending', v_attempt, v_run_id, v_idempotency_key);
         EXCEPTION WHEN unique_violation THEN
-            SELECT t.task_id, t.last_attempt_run, t.attempts 
+            SELECT t.task_id, t.last_attempt_run, t.attempts
             INTO v_existing_task_id, v_existing_run_id, v_existing_attempt
             FROM ssf.tasks t
             WHERE t.queue_name = p_queue_name AND t.idempotency_key = v_idempotency_key;
         END;
-            
+
         IF v_existing_task_id IS NOT NULL THEN
             RETURN QUERY SELECT v_existing_task_id, v_existing_run_id, v_existing_attempt, FALSE;
             RETURN;
@@ -276,7 +276,7 @@ BEGIN
 
     INSERT INTO ssf.runs (queue_name, run_id, task_id, attempt, state, available_at)
     VALUES (p_queue_name, v_run_id, v_task_id, v_attempt, 'pending', v_now);
-        
+
     RETURN QUERY SELECT v_task_id, v_run_id, v_attempt, TRUE;
 END;
 $$;
@@ -298,7 +298,7 @@ RETURNS TABLE (
     max_attempts INT,
     headers JSONB,
     wake_event TEXT,
-    event_payload TEXT
+    event_payload JSONB
 )
 LANGUAGE plpgsql
 AS $$
@@ -306,13 +306,13 @@ DECLARE
     v_now TIMESTAMPTZ := ssf.current_time_fn();
     v_claim_until TIMESTAMPTZ := v_now + (p_claim_timeout || ' seconds')::INTERVAL;
 BEGIN
-    
+
     CREATE TEMP TABLE IF NOT EXISTS claimed_temp (
-        run_id UUID, 
-        task_id UUID, 
+        run_id UUID,
+        task_id UUID,
         attempt INT
     ) ON COMMIT DROP;
-    
+
     TRUNCATE claimed_temp;
 
     WITH candidate AS (
@@ -351,7 +351,7 @@ BEGIN
 
     -- Select Results
     RETURN QUERY
-    SELECT c.run_id, c.task_id, c.attempt, t.task_name, t.params, t.retry_strategy, 
+    SELECT c.run_id, c.task_id, c.attempt, t.task_name, t.params, t.retry_strategy,
            t.max_attempts, t.headers, r.wake_event, r.event_payload
     FROM claimed_temp c
     JOIN ssf.runs r ON r.queue_name = p_queue_name AND r.run_id = c.run_id
@@ -364,7 +364,7 @@ $$;
 CREATE OR REPLACE PROCEDURE ssf.complete_run(
     p_queue_name TEXT,
     p_run_id UUID,
-    p_state TEXT DEFAULT NULL
+    p_state JSONB DEFAULT NULL
 )
 LANGUAGE plpgsql
 AS $$
@@ -380,20 +380,20 @@ BEGIN
     IF v_task_id IS NULL THEN
         RAISE EXCEPTION 'Run not found.' USING ERRCODE = '50005';
     END IF;
-        
+
     IF v_state <> 'running' THEN
         RAISE EXCEPTION 'Run is not currently running.' USING ERRCODE = '50006';
     END IF;
 
-    UPDATE ssf.runs 
-    SET state = 'completed', completed_at = ssf.current_time_fn(), result = p_state 
+    UPDATE ssf.runs
+    SET state = 'completed', completed_at = ssf.current_time_fn(), result = p_state
     WHERE queue_name = p_queue_name AND run_id = p_run_id;
 
-    UPDATE ssf.tasks 
-    SET state = 'completed', completed_payload = p_state, last_attempt_run = p_run_id 
+    UPDATE ssf.tasks
+    SET state = 'completed', completed_payload = p_state, last_attempt_run = p_run_id
     WHERE queue_name = p_queue_name AND task_id = v_task_id;
 
-    DELETE FROM ssf.waits 
+    DELETE FROM ssf.waits
     WHERE queue_name = p_queue_name AND run_id = p_run_id;
 END;
 $$;
@@ -418,12 +418,12 @@ BEGIN
         RAISE EXCEPTION 'Run is not currently running or does not exist.' USING ERRCODE = '50007';
     END IF;
 
-    UPDATE ssf.runs 
-    SET state = 'sleeping', claimed_by = NULL, claim_expires_at = NULL, available_at = p_wake_at, wake_event = NULL 
+    UPDATE ssf.runs
+    SET state = 'sleeping', claimed_by = NULL, claim_expires_at = NULL, available_at = p_wake_at, wake_event = NULL
     WHERE queue_name = p_queue_name AND run_id = p_run_id;
 
-    UPDATE ssf.tasks 
-    SET state = 'sleeping' 
+    UPDATE ssf.tasks
+    SET state = 'sleeping'
     WHERE queue_name = p_queue_name AND task_id = v_task_id;
 END;
 $$;
@@ -439,14 +439,14 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_now TIMESTAMPTZ := ssf.current_time_fn();
-    
+
     v_task_id UUID;
     v_attempt INT;
     v_retry_strategy JSONB;
     v_max_attempts INT;
     v_first_started TIMESTAMPTZ;
     v_cancellation JSONB;
-    
+
     v_next_attempt INT;
     v_delay_seconds DOUBLE PRECISION := 0;
     v_next_available TIMESTAMPTZ;
@@ -456,7 +456,7 @@ DECLARE
     v_max_seconds DOUBLE PRECISION;
     v_max_duration BIGINT;
     v_task_cancel BOOLEAN := FALSE;
-    
+
     v_new_run_id UUID;
     v_task_state_after VARCHAR(50);
     v_recorded_attempt INT;
@@ -472,7 +472,7 @@ BEGIN
         RAISE EXCEPTION 'Run cannot be failed.' USING ERRCODE = '50008';
     END IF;
 
-    SELECT retry_strategy, max_attempts, first_started_at, cancellation 
+    SELECT retry_strategy, max_attempts, first_started_at, cancellation
     INTO v_retry_strategy, v_max_attempts, v_first_started, v_cancellation
     FROM ssf.tasks
     WHERE queue_name = p_queue_name AND task_id = v_task_id
@@ -494,7 +494,7 @@ BEGIN
                 v_base := COALESCE((v_retry_strategy->>'base_seconds')::DOUBLE PRECISION, 30.0);
                 v_factor := COALESCE((v_retry_strategy->>'factor')::DOUBLE PRECISION, 2.0);
                 v_delay_seconds := v_base * power(v_factor, CASE WHEN v_attempt - 1 > 0 THEN v_attempt - 1 ELSE 0 END);
-                
+
                 v_max_seconds := (v_retry_strategy->>'max_seconds')::DOUBLE PRECISION;
                 IF v_max_seconds IS NOT NULL AND v_delay_seconds > v_max_seconds THEN
                     v_delay_seconds := v_max_seconds;
@@ -502,7 +502,7 @@ BEGIN
             ELSE
                 v_delay_seconds := 0;
             END IF;
-            
+
             v_next_available := v_now + (v_delay_seconds || ' seconds')::INTERVAL;
         END IF;
 
@@ -534,8 +534,8 @@ BEGIN
         v_last_attempt_run := p_run_id;
     END IF;
 
-    UPDATE ssf.runs 
-    SET state = 'failed', wake_event = NULL, failed_at = v_now, failure_reason = p_reason 
+    UPDATE ssf.runs
+    SET state = 'failed', wake_event = NULL, failed_at = v_now, failure_reason = p_reason
     WHERE queue_name = p_queue_name AND run_id = p_run_id;
 
     IF v_new_run_id IS NOT NULL THEN
@@ -543,11 +543,11 @@ BEGIN
         VALUES (p_queue_name, v_new_run_id, v_task_id, v_next_attempt, v_task_state_after, v_next_available);
     END IF;
 
-    UPDATE ssf.tasks 
-    SET state = v_task_state_after, 
-        attempts = CASE WHEN attempts > v_recorded_attempt THEN attempts ELSE v_recorded_attempt END, 
-        last_attempt_run = v_last_attempt_run, 
-        cancelled_at = COALESCE(cancelled_at, v_cancelled_at) 
+    UPDATE ssf.tasks
+    SET state = v_task_state_after,
+        attempts = CASE WHEN attempts > v_recorded_attempt THEN attempts ELSE v_recorded_attempt END,
+        last_attempt_run = v_last_attempt_run,
+        cancelled_at = COALESCE(cancelled_at, v_cancelled_at)
     WHERE queue_name = p_queue_name AND task_id = v_task_id;
 
     DELETE FROM ssf.waits WHERE queue_name = p_queue_name AND run_id = p_run_id;
@@ -559,7 +559,7 @@ CREATE OR REPLACE PROCEDURE ssf.set_task_checkpoint_state(
     p_queue_name TEXT,
     p_task_id UUID,
     p_step_name TEXT,
-    p_state TEXT,
+    p_state JSONB,
     p_owner_run UUID,
     p_extend_claim_by INT DEFAULT NULL
 )
@@ -603,7 +603,7 @@ BEGIN
     IF v_existing_owner IS NULL OR v_existing_attempt IS NULL OR v_new_attempt >= v_existing_attempt THEN
         INSERT INTO ssf.checkpoints (queue_name, task_id, checkpoint_name, state, status, owner_run_id, updated_at)
         VALUES (p_queue_name, p_task_id, p_step_name, p_state, 'committed', p_owner_run, v_now)
-        ON CONFLICT (queue_name, task_id, checkpoint_name) DO UPDATE 
+        ON CONFLICT (queue_name, task_id, checkpoint_name) DO UPDATE
         SET state = EXCLUDED.state, status = EXCLUDED.status, owner_run_id = EXCLUDED.owner_run_id, updated_at = EXCLUDED.updated_at;
     END IF;
 END;
@@ -653,7 +653,7 @@ CREATE OR REPLACE FUNCTION ssf.get_task_checkpoint_state(
 )
 RETURNS TABLE (
     checkpoint_name VARCHAR(450),
-    state TEXT,
+    state JSONB,
     status VARCHAR(50),
     owner_run_id UUID,
     updated_at TIMESTAMPTZ
@@ -664,8 +664,8 @@ BEGIN
     RETURN QUERY
     SELECT c.checkpoint_name, c.state, c.status, c.owner_run_id, c.updated_at
     FROM ssf.checkpoints c
-    WHERE c.queue_name = p_queue_name 
-      AND c.task_id = p_task_id 
+    WHERE c.queue_name = p_queue_name
+      AND c.task_id = p_task_id
       AND c.checkpoint_name = p_step_name
       AND (p_include_pending = 1 OR c.status = 'committed');
 END;
@@ -679,7 +679,7 @@ CREATE OR REPLACE FUNCTION ssf.get_task_checkpoint_states(
 )
 RETURNS TABLE (
     checkpoint_name VARCHAR(450),
-    state TEXT,
+    state JSONB,
     status VARCHAR(50),
     owner_run_id UUID,
     updated_at TIMESTAMPTZ
@@ -690,8 +690,8 @@ DECLARE
     v_run_task_id UUID;
     v_run_attempt INT;
 BEGIN
-    SELECT task_id, attempt INTO v_run_task_id, v_run_attempt 
-    FROM ssf.runs 
+    SELECT task_id, attempt INTO v_run_task_id, v_run_attempt
+    FROM ssf.runs
     WHERE queue_name = p_queue_name AND run_id = p_run_id;
 
     IF v_run_task_id IS NULL THEN RAISE EXCEPTION 'Run not found' USING ERRCODE = '50014'; END IF;
@@ -701,8 +701,8 @@ BEGIN
     SELECT c.checkpoint_name, c.state, c.status, c.owner_run_id, c.updated_at
     FROM ssf.checkpoints c
     LEFT JOIN ssf.runs r ON r.queue_name = c.queue_name AND r.run_id = c.owner_run_id
-    WHERE c.queue_name = p_queue_name 
-      AND c.task_id = p_task_id 
+    WHERE c.queue_name = p_queue_name
+      AND c.task_id = p_task_id
       AND c.status = 'committed'
       AND (r.attempt IS NULL OR r.attempt <= v_run_attempt)
     ORDER BY c.updated_at ASC;
@@ -720,7 +720,7 @@ CREATE OR REPLACE FUNCTION ssf.await_event(
 )
 RETURNS TABLE (
     should_suspend BOOLEAN,
-    payload TEXT
+    payload JSONB
 )
 LANGUAGE plpgsql
 AS $$
@@ -728,12 +728,12 @@ DECLARE
     v_now TIMESTAMPTZ := ssf.current_time_fn();
     v_timeout_at TIMESTAMPTZ := NULL;
     v_run_state VARCHAR(50);
-    v_existing_payload TEXT;
+    v_existing_payload JSONB;
     v_wake_event TEXT;
     v_task_state VARCHAR(50);
-    v_checkpoint_payload TEXT;
-    v_event_payload TEXT;
-    v_resolved_payload TEXT;
+    v_checkpoint_payload JSONB;
+    v_event_payload JSONB;
+    v_resolved_payload JSONB;
     v_dummy INT;
 BEGIN
     IF p_event_name IS NULL OR length(trim(p_event_name)) = 0 THEN
@@ -791,7 +791,7 @@ BEGIN
     IF v_resolved_payload IS NOT NULL THEN
         INSERT INTO ssf.checkpoints (queue_name, task_id, checkpoint_name, state, status, owner_run_id, updated_at)
         VALUES (p_queue_name, p_task_id, p_step_name, v_resolved_payload, 'committed', p_run_id, v_now)
-        ON CONFLICT (queue_name, task_id, checkpoint_name) DO UPDATE 
+        ON CONFLICT (queue_name, task_id, checkpoint_name) DO UPDATE
         SET state = EXCLUDED.state, status = EXCLUDED.status, owner_run_id = EXCLUDED.owner_run_id, updated_at = EXCLUDED.updated_at;
 
         RETURN QUERY SELECT FALSE, v_resolved_payload;
@@ -800,24 +800,24 @@ BEGIN
 
     IF v_resolved_payload IS NULL AND v_wake_event = p_event_name AND v_existing_payload IS NULL THEN
         UPDATE ssf.runs SET wake_event = NULL WHERE queue_name = p_queue_name AND run_id = p_run_id;
-        RETURN QUERY SELECT FALSE, NULL::TEXT;
+        RETURN QUERY SELECT FALSE, NULL::JSONB
         RETURN;
     END IF;
 
     INSERT INTO ssf.waits (queue_name, task_id, run_id, step_name, event_name, timeout_at, created_at)
     VALUES (p_queue_name, p_task_id, p_run_id, p_step_name, p_event_name, v_timeout_at, v_now)
-    ON CONFLICT (queue_name, run_id, step_name) DO UPDATE 
+    ON CONFLICT (queue_name, run_id, step_name) DO UPDATE
     SET event_name = EXCLUDED.event_name, timeout_at = EXCLUDED.timeout_at, created_at = EXCLUDED.created_at;
 
     UPDATE ssf.runs
-    SET state = 'sleeping', claimed_by = NULL, claim_expires_at = NULL, 
-        available_at = COALESCE(v_timeout_at, '9999-12-31 23:59:59.999999+00'::TIMESTAMPTZ), 
+    SET state = 'sleeping', claimed_by = NULL, claim_expires_at = NULL,
+        available_at = COALESCE(v_timeout_at, '9999-12-31 23:59:59.999999+00'::TIMESTAMPTZ),
         wake_event = p_event_name, event_payload = NULL
     WHERE queue_name = p_queue_name AND run_id = p_run_id;
 
     UPDATE ssf.tasks SET state = 'sleeping' WHERE queue_name = p_queue_name AND task_id = p_task_id;
 
-    RETURN QUERY SELECT TRUE, NULL::TEXT;
+    RETURN QUERY SELECT TRUE, NULL::JSONB;
 END;
 $$;
 
@@ -825,13 +825,13 @@ $$;
 CREATE OR REPLACE PROCEDURE ssf.emit_event(
     p_queue_name TEXT,
     p_event_name TEXT,
-    p_payload TEXT DEFAULT NULL
+    p_payload JSONB DEFAULT 'null'::jsonb
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_now TIMESTAMPTZ := ssf.current_time_fn();
-    v_payload TEXT := COALESCE(p_payload, 'null');
+    v_payload JSONB := COALESCE(p_payload, 'null'::jsonb);
     v_emit_applied INT;
 BEGIN
     IF p_event_name IS NULL OR length(trim(p_event_name)) = 0 THEN
