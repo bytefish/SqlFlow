@@ -95,7 +95,6 @@ The SqlFlow SDK for Java is available in Maven Central repository:
 
 Use either the `sqlflow-postgres` or `sqlflow-sqlserver` module.
 
-
 # Getting Started with the Python SDK #
 
 Install the SqlFlow SDK from PyPI:
