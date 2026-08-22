@@ -1,0 +1,33 @@
+# Binärdateien und ausführbare Programme (Go baut diese lokal)
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test- und Profiling-Ergebnisse
+*.out
+*.test
+*.prof
+
+# Go-Arbeitsverzeichnis und Caches
+.go/
+vendor/
+
+# IDEs und Editor-Konfigurationen (VS Code, GoLand, JetBrains)
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# Betriebssystem-spezifische Dateien
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
