@@ -9,56 +9,62 @@ import (
 var ErrSuspendTask = errors.New("task suspended waiting for event")
 
 type TaskContext struct {
-	TaskID      string
-	RunID       string
-	Attempt     int
-	QueueName   string
-	DB          Driver
-	Ctx         context.Context
-    RawParams   []byte
+	TaskID    string
+	RunID     string
+	Attempt   int
+	QueueName string
+	DB        Driver
+	Ctx       context.Context
+	RawParams []byte
 }
 
-func (c *TaskContext) Step(stepName string, action func() (any, error)) (any, error) {
-	stateRow, err := c.DB.GetTaskCheckpointState(c.Ctx, c.QueueName, c.TaskID, stepName, 0)
+func Step[T any](ctx *TaskContext, stepName string, action func() (T, error)) (T, error) {
+	var zero T
+
+	stateRow, err := ctx.DB.GetTaskCheckpointState(ctx.Ctx, ctx.QueueName, ctx.TaskID, stepName, 0)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	if stateRow != nil && len(stateRow.State) > 0 {
-		var result any
-		json.Unmarshal(stateRow.State, &result)
-		return result, nil
+		var result T
+		err := json.Unmarshal(stateRow.State, &result)
+		return result, err
 	}
 
 	result, err := action()
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	stateBytes, _ := json.Marshal(result)
     
-	err = c.DB.SetTaskCheckpointState(c.Ctx, c.QueueName, c.TaskID, stepName, string(stateBytes), c.RunID, 0)
+	err = ctx.DB.SetTaskCheckpointState(ctx.Ctx, ctx.QueueName, ctx.TaskID, stepName, string(stateBytes), ctx.RunID, 0)
 	
 	return result, err
 }
 
-func (c *TaskContext) AwaitEvent(eventName string, stepName string, timeout *int) (any, error) {
-	result, err := c.DB.AwaitEvent(c.Ctx, c.QueueName, c.TaskID, c.RunID, stepName, eventName, timeout)
+func AwaitEvent[T any](ctx *TaskContext, eventName string, stepName string, timeout *int) (T, error) {
+	var zero T
+	result, err := ctx.DB.AwaitEvent(ctx.Ctx, ctx.QueueName, ctx.TaskID, ctx.RunID, stepName, eventName, timeout)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	if result == nil {
-		return nil, errors.New("unexpected empty result from await_event")
+		return zero, errors.New("unexpected empty result from await_event")
 	}
 
 	if result.ShouldSuspend {
-		return nil, ErrSuspendTask 
+		return zero, ErrSuspendTask 
 	}
 
-	var payload any
+	var payload T
+
 	if len(result.Payload) > 0 {
-		json.Unmarshal(result.Payload, &payload)
+		if err := json.Unmarshal(result.Payload, &payload); err != nil {
+			return zero, err
+		}
 	}
 
 	return payload, nil
