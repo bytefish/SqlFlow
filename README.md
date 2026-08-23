@@ -1977,13 +1977,12 @@ For this demonstration, we are simulating an LLM API call with `time.Sleep` and 
 feedback. Because of Go's goroutines, `time.Sleep` only blocks the current worker thread.
 
 ```go
+
 type LlmService struct{}
 
 func (s *LlmService) GenerateFix(stackTrace string, lastFeedback string) Solution {
 	log.Printf("[LlmService] Agent is thinking: 'Learned from feedback: %s'", lastFeedback)
-	
-	// Simulate a very expensive LLM call with a delay
-	time.Sleep(2500 * time.Millisecond) 
+	time.Sleep(2500 * time.Millisecond)
 
 	var code string
 	if strings.Contains(strings.ToLower(lastFeedback), "error handling") {
@@ -1993,8 +1992,7 @@ func (s *LlmService) GenerateFix(stackTrace string, lastFeedback string) Solutio
 	}
 
 	log.Printf("[LlmService] LLM generated a potential fix:\n%s", code)
-	
-	// We return a strongly-typed struct. SqlFlow's generic Step function will handle serialization.
+    
 	return Solution{PatchedCode: code}
 }
 ```
@@ -2028,12 +2026,6 @@ func (s *GitHubService) RequestHumanReview(issueID string, proposedFix Solution,
 		issueID, correlationID, proposedFix.PatchedCode)
 	time.Sleep(1200 * time.Millisecond)
 }
-
-type LocalNotificationService struct{}
-
-func (s *LocalNotificationService) NotifyReviewer(issueID string, correlationID string) {
-	log.Printf("[LocalNotification] Ping! Please perform code review %s for issue %s.", correlationID, issueID)
-}
 ```
 
 ## The Autonomous Agent Job ##
@@ -2047,6 +2039,7 @@ engine to safely suspend the workflow state to the database and free up the work
 event being awaited.
 
 ```go
+
 var llmService = &LlmService{}
 var gitHubService = &GitHubService{}
 var notificationService = &LocalNotificationService{}
@@ -2054,8 +2047,6 @@ var notificationService = &LocalNotificationService{}
 func autonomousAgentWorkflow(ctx *sqlflow.TaskContext, task AgentTask) error {
 	log.Printf("[Workflow] Agent starts investigation for ticket %s", task.IssueID)
 
-	// Load the Issue Context first, so the LLM has all relevant information.
-	// Notice how Go infers `bugReport` is of type `Issue`!
 	bugReport, err := sqlflow.Step(ctx, "fetch-issue-context", func() (Issue, error) {
 		return gitHubService.GetIssueDetails(task.IssueID), nil
 	})
@@ -2084,19 +2075,18 @@ func autonomousAgentWorkflow(ctx *sqlflow.TaskContext, task AgentTask) error {
 			notificationService.NotifyReviewer(task.IssueID, correlationID)
 			return true, nil
 		})
+
 		if err != nil {
 			return err
 		}
 
 		log.Printf("[Workflow] Review requested for %s. Agent goes to sleep and waits...", correlationID)
 
-		// Wait for a human decision without blocking a thread!
-		// This will internally throw an ErrSuspendTask if the event hasn't happened yet.
 		approval, err := sqlflow.AwaitEvent[HumanApproval](
 			ctx,
 			fmt.Sprintf("agent-approval:%s:%s", task.IssueID, correlationID),
 			fmt.Sprintf("wait-for-human-review-%d", attempt),
-			nil, // No timeout
+			nil,
 		)
 		if err != nil {
 			return err
@@ -2146,11 +2136,23 @@ Now there are two HTTP endpoints for interacting with the Workflow:
 * The `/agent/review/...` endpoint acts as our callback webhook. 
     * When the human reviewer approves or rejects a fix, this endpoint emits the event back into the queue, which then wakes up the sleeping job right where it left off.
 
-Let's define an `AgentController` for it.
+The standard Go `net/http` application serves as the host for our SqlFlow runtime.
+
+During application startup, we:
+
+* Create a PostgreSQL driver and establish the database connection.
+* Create a SqlFlow client instance.
+* Create or verify the workflow queue.
+* Register the workflow implementation under a task name.
+Ü Start a worker that continuously polls the queue and executes tasks.
+
+The worker runs in the background using goroutines alongside the HTTP server. It continuously claims available tasks from the 
+queue, executes workflow steps, persists checkpoints, and resumes suspended workflows when events arrive.
 
 ```go
+var sqlflowClient *sqlflow.Client
+
 func main() {
-	// Setup graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -2161,10 +2163,9 @@ func main() {
 	}
 	defer dbDriver.Close()
 
-	sqlflowClient := sqlflow.NewClient(dbDriver)
+	sqlflowClient = sqlflow.NewClient(dbDriver)
 	_ = sqlflowClient.CreateQueue(ctx, "ai-agent-queue", "unpartitioned")
 
-	// Register Workflow with strong typing!
 	sqlflow.RegisterWorkflow(sqlflowClient, "solve-bug", autonomousAgentWorkflow)
 
 	workerOpts := sqlflow.WorkerOptions{
@@ -2179,10 +2180,8 @@ func main() {
 	
 	log.Println("Background worker started.")
 
-	// Setup HTTP API
 	mux := http.NewServeMux()
 
-	// A Webhook triggers the Agent, such as a new JIRA ticket or GitHub issue.
 	mux.HandleFunc("POST /agent/start", func(w http.ResponseWriter, r *http.Request) {
 		var task AgentTask
 		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
@@ -2205,7 +2204,6 @@ func main() {
 		})
 	})
 
-	// A Lead-Developer clicks on 'Approve' or 'Reject', with Feedback.
 	mux.HandleFunc("POST /agent/review/{issue_id}/{correlation_id}", func(w http.ResponseWriter, r *http.Request) {
 		issueID := r.PathValue("issue_id")
 		correlationID := r.PathValue("correlation_id")
@@ -2216,7 +2214,6 @@ func main() {
 			return
 		}
 
-		// Wake up the agent that is working on the ticket
 		eventName := fmt.Sprintf("agent-approval:%s:%s", issueID, correlationID)
 		options := sqlflow.EmitEventOptions{QueueName: "ai-agent-queue"}
 		
@@ -2247,7 +2244,6 @@ func main() {
 		}
 	}()
 
-	// Block main thread until shutdown signal
 	<-ctx.Done()
 	log.Println("Shutting down system...")
 
@@ -2256,16 +2252,10 @@ func main() {
 	
 	server.Shutdown(shutdownCtx)
 	worker.Stop()
-	time.Sleep(500 * time.Millisecond) 
+	time.Sleep(500 * time.Millisecond)
 	
 	log.Println("System shut down successfully.")
 }
-```
-
-We can now 
-
-```
-go run .\examples\ai_agent_workflow\main.go
 ```
 
 ## An Example Session with the AI Agent Job ##
