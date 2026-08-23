@@ -98,10 +98,21 @@ Use either the `sqlflow-postgres` or `sqlflow-sqlserver` module.
 
 # Getting Started with the Go SDK #
 
-You can install the SqlFlow SDK by using `go get`:
+Install the SqlFlow Go SDK using go get:
 
 ```bash
-go get github.com/bytefish/SqlFlow/sdks/go@v0.1.0
+go get github.com/bytefish/SqlFlow/sdks/go
+```
+
+Then import the SDK and your preferred database driver in your application.
+
+For PostgreSQL support, also import the postgres subpackage:
+
+```go
+import (
+	"github.com/bytefish/SqlFlow/sdks/go"
+	"github.com/bytefish/SqlFlow/sdks/go/postgres"
+)
 ```
 
 # Getting Started with the Python SDK #
@@ -1722,7 +1733,7 @@ Content-Type: application/json
 %}
 ```
 
-### Starting the Log Output ###
+### Analyzing the Session ###
 
 We'll start the Backend by running:
 
@@ -1902,23 +1913,6 @@ INFO:sqlflow:Task 010f6fee-2fa7-42e1-8c91-389ce54c68f2 completed successfully.
 ```
 
 # Go SDK: Building a Durable AI Agent #
-
-Install the SqlFlow Go SDK using go get:
-
-```bash
-go get github.com/bytefish/SqlFlow/sdks/go
-```
-
-Then import the SDK and your preferred database driver in your application.
-
-For PostgreSQL support, import the postgres subpackage:
-
-```go
-import (
-	"github.com/bytefish/SqlFlow/sdks/go"
-	"github.com/bytefish/SqlFlow/sdks/go/postgres"
-)
-```
 
 ## What we are going to build ##
 
@@ -2369,7 +2363,120 @@ Content-Type: application/json
 %}
 ```
 
-### Analyzing the Log Output ###
+### Analyzing the Session ###
+
+We start by running our Go project:
+
+```bash
+go run main.go
+```
+
+We'll then run our *.http script using ijhttp -L VERBOSE agent-requests.http.
+
+The first request for fixing an issue 12345 is sent:
+
+```bash
+PS sqlflow-example\requests> ijhttp -L VERBOSE agent-requests.http
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Running IntelliJ HTTP Client with                      │
+├────────────────────────┬────────────────────────────────────────────────────┤
+│         Files          │ agent-requests.http                                │
+├────────────────────────┼────────────────────────────────────────────────────┤
+│   Public Environment   │                                                    │
+├────────────────────────┼────────────────────────────────────────────────────┤
+│  Private Environment   │                                                    │
+└────────────────────────┴────────────────────────────────────────────────────┘
+Request 'startAgent' POST http://localhost:8000/agent/start
+= request =>
+POST http://localhost:8000/agent/start
+Content-Type: application/json
+Content-Length: 25
+User-Agent: IntelliJ HTTP Client/CLI 2026.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "issue_id": "12345"
+}
+
+###
+
+<= response =
+HTTP/1.1 200 OK
+date: Sun, 23 Aug 2026 09:25:51 GMT
+server: Go-http-client/1.1
+content-length: 146
+content-type: application/json
+
+{"run_id":"15fa7c33-93c6-4179-92ed-2c7bd7001627","task_id":"010f6fee-2fa7-42e1-8c91-389ce54c68f2","status":"Agent dispatched to fix Issue #12345"}
+
+Response code: 200 (OK); Time: 454ms (454 ms); Content length: 146 bytes (146 B)
+```
+
+In the Go backend output, we can see our fictional agent doing its work. It goes idle and requests a human review. We'll reject the fix.
+
+```bash
+Request 'Reject the first attempt after a delay' POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-1
+= request =>
+POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-1
+Content-Type: application/json
+Content-Length: 100
+User-Agent: IntelliJ HTTP Client/CLI 2026.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "approved": false,
+  "reason": "This is way too simple, add a better error handling strategy!"
+}
+
+###
+
+<= response =
+HTTP/1.1 200 OK
+date: Sun, 23 Aug 2026 09:26:22 GMT
+server: Go-http-client/1.1
+content-length: 175
+content-type: application/json
+
+{"message":"Fix for 010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-1 rejected. Agent tries again with feedback: 'This is way too simple, add a better error handling strategy!'"}
+
+Response code: 200 (OK); Time: 19ms (19 ms); Content length: 175 bytes (175 B)
+```
+
+We can see the Go worker waking up, restoring state and generating another fix based on our feedback. Let's accept the fix:
+
+```bash
+Request 'Approve the second attempt after another delay' POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-2
+= request =>
+POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-2
+Content-Type: application/json
+Content-Length: 59
+User-Agent: IntelliJ HTTP Client/CLI 2026.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "approved": true,
+  "reason": "Now, this looks good!"
+}
+
+###
+
+<= response =
+HTTP/1.1 200 OK
+date: Sun, 23 Aug 2026 09:26:53 GMT
+server: Go-http-client/1.1
+content-length: 112
+content-type: application/json
+
+{"message":"Fix for 010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-2 approved. Agent is now completing its work."}
+
+Response code: 200 (OK); Time: 21ms (21 ms); Content length: 112 bytes (112 B)
+```
+
+In the Go backend logs, we can observe the entire lifecycle: how the workflow is suspended, fully unloaded from 
+memory, and then replayed from the database checkpoints exactly when our http requests arrive:
 
 ```bash
 2026/08/23 09:25:50 Worker agent-worker-1 started on queue 'ai-agent-queue'
