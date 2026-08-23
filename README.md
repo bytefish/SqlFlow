@@ -2398,7 +2398,7 @@ server: Go-http-client/1.1
 content-length: 146
 content-type: application/json
 
-{"run_id":"15fa7c33-93c6-4179-92ed-2c7bd7001627","task_id":"010f6fee-2fa7-42e1-8c91-389ce54c68f2","status":"Agent dispatched to fix Issue #12345"}
+{"run_id":"15fa7c33-93c6-4179-92ed-2c7bd7001627","task_id":"27a11757-3ff2-4baa-9092-5e924dba5a6f","status":"Agent dispatched to fix Issue #12345"}
 
 Response code: 200 (OK); Time: 454ms (454 ms); Content length: 146 bytes (146 B)
 ```
@@ -2406,9 +2406,9 @@ Response code: 200 (OK); Time: 454ms (454 ms); Content length: 146 bytes (146 B)
 In the Go backend output, we can see our fictional agent doing its work. It goes idle and requests a human review. We'll reject the fix.
 
 ```bash
-Request 'Reject the first attempt after a delay' POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-1
+Request 'Reject the first attempt after a delay' POST http://localhost:8000/agent/review/12345/27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1
 = request =>
-POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-1
+POST http://localhost:8000/agent/review/12345/27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1
 Content-Type: application/json
 Content-Length: 100
 User-Agent: IntelliJ HTTP Client/CLI 2026.1
@@ -2429,7 +2429,7 @@ server: Go-http-client/1.1
 content-length: 175
 content-type: application/json
 
-{"message":"Fix for 010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-1 rejected. Agent tries again with feedback: 'This is way too simple, add a better error handling strategy!'"}
+{"message":"Fix for 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1 rejected. Agent tries again with feedback: 'This is way too simple, add a better error handling strategy!'"}
 
 Response code: 200 (OK); Time: 19ms (19 ms); Content length: 175 bytes (175 B)
 ```
@@ -2437,9 +2437,9 @@ Response code: 200 (OK); Time: 19ms (19 ms); Content length: 175 bytes (175 B)
 We can see the Go worker waking up, restoring state and generating another fix based on our feedback. Let's accept the fix:
 
 ```bash
-Request 'Approve the second attempt after another delay' POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-2
+Request 'Approve the second attempt after another delay' POST http://localhost:8000/agent/review/12345/27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-2
 = request =>
-POST http://localhost:8000/agent/review/12345/010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-2
+POST http://localhost:8000/agent/review/12345/27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-2
 Content-Type: application/json
 Content-Length: 59
 User-Agent: IntelliJ HTTP Client/CLI 2026.1
@@ -2460,7 +2460,7 @@ server: Go-http-client/1.1
 content-length: 112
 content-type: application/json
 
-{"message":"Fix for 010f6fee-2fa7-42e1-8c91-389ce54c68f2-attempt-2 approved. Agent is now completing its work."}
+{"message":"Fix for 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-2 approved. Agent is now completing its work."}
 
 Response code: 200 (OK); Time: 21ms (21 ms); Content length: 112 bytes (112 B)
 ```
@@ -2472,34 +2472,6 @@ memory, and then replayed from the database checkpoints exactly when our http re
 2026/08/23 09:25:50 Worker agent-worker-1 started on queue 'ai-agent-queue'
 2026/08/23 09:25:50 Background worker started.
 2026/08/23 09:25:50 Web API is running at http://localhost:8000
-2026/08/23 09:26:00 [Workflow] Agent starts investigation for ticket 12345
-2026/08/23 09:26:00 [GitHubService] Fetching details for ticket #12345 from the repository...
-2026/08/23 09:26:00 [Workflow] Attempt 1/3: Generating fix based on: 'Initial Attempt'
-2026/08/23 09:26:00 [LlmService] Agent is thinking: 'Learned from feedback: Initial Attempt'
-2026/08/23 09:26:03 [LlmService] LLM generated a potential fix:
-// AI: Simple Fix for the NullReferenceException
-if(data is None): return
-2026/08/23 09:26:03 [GitHubService] ⏳ ACTION REQUIRED: A solution for issue #12345 (Correlation ID 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1) is available:
-// AI: Simple Fix for the NullReferenceException
-if(data is None): return
-2026/08/23 09:26:04 [LocalNotification] Ping! Please perform code review 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1 for issue 12345.
-2026/08/23 09:26:04 [Workflow] Review requested for 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1. Agent goes to sleep and waits...
-2026/08/23 09:26:04 Task 27a11757-3ff2-4baa-9092-5e924dba5a6f suspended
-2026/08/23 09:26:32 [Workflow] Agent starts investigation for ticket 12345
-2026/08/23 09:26:32 [Workflow] Attempt 1/3: Generating fix based on: 'Initial Attempt'
-2026/08/23 09:26:32 [Workflow] Review requested for 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1. Agent goes to sleep and waits...
-2026/08/23 09:26:32 [Workflow] ❌ Attempt 1 was rejected: This is way too simple, add a better error handling strategy!
-2026/08/23 09:26:32 [Workflow] Attempt 2/3: Generating fix based on: 'This is way too simple, add a better error handling strategy!'
-2026/08/23 09:26:32 [LlmService] Agent is thinking: 'Learned from feedback: This is way too simple, add a better error handling strategy!'
-2026/08/23 09:26:34 [LlmService] LLM generated a potential fix:
-// AI: Improved Logging & Error Handling added
-if(data == null) raise ValueError('Null data');
-2026/08/23 09:26:34 [GitHubService] ⏳ ACTION REQUIRED: A solution for issue #12345 (Correlation ID 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-2) is available:
-// AI: Improved Logging & Error Handling added
-if(data == null) raise ValueError('Null data');
-2026/08/23 09:26:35 [LocalNotification] Ping! Please perform code review 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-2 for issue 12345.
-2026/08/23 09:26:35 [Workflow] Review requested for 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-2. Agent goes to sleep and waits...
-2026/08/23 09:26:35 Task 27a11757-3ff2-4baa-9092-5e924dba5a6f suspended
 2026/08/23 09:27:02 [Workflow] Agent starts investigation for ticket 12345
 2026/08/23 09:27:02 [Workflow] Attempt 1/3: Generating fix based on: 'Initial Attempt'
 2026/08/23 09:27:02 [Workflow] Review requested for 27a11757-3ff2-4baa-9092-5e924dba5a6f-attempt-1. Agent goes to sleep and waits...
@@ -2509,5 +2481,4 @@ if(data == null) raise ValueError('Null data');
 2026/08/23 09:27:02 [Workflow] ✅ Fix approved! Creating pull request...
 2026/08/23 09:27:02 [GitHubService] PR for issue #12345 has been created...
 2026/08/23 09:27:03 [Workflow] Mission accomplished! PR created: https://github.com/company/repo/pull/7971
-
 ```
