@@ -1,4 +1,4 @@
-module local/sqlflow
+module github.com/bytefish/SqlFlow/sdks/go
 
 go 1.27.0
 

@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"local/sqlflow"          // Adjust the path to match your go.mod
-	"local/sqlflow/postgres" // Adjust the path to match your go.mod
+	"github.com/bytefish/SqlFlow/sdks/go"
+	"github.com/bytefish/SqlFlow/sdks/go/postgres"
 )
 
 type MyWorkflowParams struct {
@@ -19,7 +19,6 @@ type MyWorkflowParams struct {
 func myFirstWorkflow(ctx *sqlflow.TaskContext, params MyWorkflowParams) error {
 	log.Printf("Workflow started. Task ID: %s, Parameters: %+v\n", ctx.TaskID, params)
 
-	// 1. Typsicherer Step: Gibt direkt eine map[string]string zurück
 	result1, err := sqlflow.Step(ctx, "fetch-data", func() (map[string]string, error) {
 		log.Println("  -> Executing 'fetch-data' (this only runs once)...")
 		time.Sleep(2 * time.Second) // Simulate work
@@ -29,10 +28,8 @@ func myFirstWorkflow(ctx *sqlflow.TaskContext, params MyWorkflowParams) error {
 		return err
 	}
 
-	// result1 ist jetzt nativ vom Typ map[string]string!
 	log.Printf("Result of fetch-data: %v\n", result1)
 
-	// 2. Typsicherer Step: Gibt direkt einen string zurück
 	_, err = sqlflow.Step(ctx, "process-data", func() (string, error) {
 		log.Println("  -> Executing 'process-data'...")
 		return "Processing completed", nil

@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"local/sqlflow"
-	"local/sqlflow/postgres"
+	"github.com/bytefish/SqlFlow/sdks/go"
+	"github.com/bytefish/SqlFlow/sdks/go/postgres"
 )
 
 // Models

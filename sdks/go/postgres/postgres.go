@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"local/sqlflow"
+	"github.com/bytefish/SqlFlow/sdks/go"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
