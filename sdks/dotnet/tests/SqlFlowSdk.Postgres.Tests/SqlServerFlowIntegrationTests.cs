@@ -1,12 +1,14 @@
-﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+﻿// Licensed under the MIT license.
+// See LICENSE file in the project root for full license information.
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using SqlFlowSdk.Core;
 using SqlFlowSdk.Database;
 using SqlFlowSdk.Workers;
-using Npgsql;             
+using System.Collections.Concurrent;
 using System.Data.Common;
-using System.Text.Json.Nodes;
+using System.Threading.Channels;
 
 namespace SqlFlowSdk.Postgres.Tests;
 
@@ -16,95 +18,264 @@ public class PostgresFlowIntegrationTests
     private static string ConnectionString = null!;
 
     /// <summary>
-    /// Starts the Containers for the Tests.
+    /// Starts the containers for the tests.
     /// </summary>
-    /// <param name="context">Required Test Context</param>
-    /// <returns>Awaitable Task</returns>
     [AssemblyInitialize]
-    public static async Task AssemblyInitializeAsync(TestContext context)
+    public static async Task AssemblyInitializeAsync(
+        TestContext context)
     {
         await DockerContainers.StartAllContainersAsync();
 
-        // Updated to use the PostgresContainer from the DockerContainers setup
-        ConnectionString = DockerContainers.PostgresContainer.GetConnectionString();
+        ConnectionString =
+            DockerContainers.PostgresContainer.GetConnectionString();
     }
 
     [TestMethod]
     public async Task Test_BasicTaskExecution_Flow()
     {
-        // ARRANGE
+        // Arrange
+        const string queueName = "test-queue";
+        const string taskName = "add-numbers";
 
-        await using DbDataSource dataSource = NpgsqlDataSource.Create(ConnectionString);
+        await using NpgsqlDataSource dataSource =
+            NpgsqlDataSource.Create(ConnectionString);
 
-        ISqlFlowDatabase db = new PostgresFlowDatabase();
-        
-        ISqlFlow client = new SqlFlow(NullLogger<SqlFlow>.Instance, dataSource, db);
+        ISqlFlowDatabase database =
+            new PostgresFlowDatabase();
 
-        // We use a TCS to signal when the background worker has actually finished the task
-        var completionSource = new TaskCompletionSource<int>();
+        await using var client = new SqlFlow(
+            NullLogger<SqlFlow>.Instance,
+            dataSource,
+            database);
 
-        // Ensure the test queue exists
-        await client.CreateQueueAsync("test-queue", default);
+        var dispatcher = new TestSqlFlowDispatcher();
 
-        // Define the Task Logic
-        client.RegisterTask(new TaskRegistrationOptions
-        {
-            Name = "add-numbers"
-        }, async (ctx, parameters, ct) =>
-        {
-            if (parameters == null)
+        var completionSource =
+            new TaskCompletionSource<int>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await client.CreateQueueAsync(
+            queueName,
+            CancellationToken.None);
+
+        client.RegisterTask(
+            new TaskRegistrationOptions
             {
-                throw new InvalidOperationException("Expected JsonObject parameters");
-            }
-            // Extract inputs
-            int a = parameters["a"]?.GetValue<int>() ?? 0;
-            int b = parameters["b"]?.GetValue<int>() ?? 0;
+                Name = taskName
+            },
+            (context, parameters, cancellationToken) =>
+            {
+                if (parameters is null)
+                {
+                    throw new InvalidOperationException(
+                        "Expected task parameters.");
+                }
 
-            var sum = a + b;
+                int a =
+                    parameters["a"]?.GetValue<int>() ?? 0;
 
-            // Signal the test that we are done
-            completionSource.SetResult(sum);
+                int b =
+                    parameters["b"]?.GetValue<int>() ?? 0;
 
-            return new { result = sum };
-        });
+                int sum = a + b;
 
-        // ACT
+                completionSource.TrySetResult(sum);
 
-        await client.SpawnAsync(new SpawnOptions { Queue = "test-queue" }, "add-numbers", new { a = 10, b = 20 }, default);
+                return Task.FromResult<object>(
+                    new
+                    {
+                        result = sum
+                    });
+            });
 
-        // 4. Worker exakt nach deiner Konstruktor-Signatur instanziieren
-        SqlFlowWorker worker = new SqlFlowWorker(new WorkerOptions
+        var workerOptions = new WorkerOptions
         {
-            Queue = "test-queue",
-            PollInterval = 0.1, // Fast polling for tests
+            Queue = queueName,
             Concurrency = 1,
-            WorkerId = "test-worker"
-        }, client);
+            WorkerId = $"test-worker-{Guid.NewGuid():N}",
+            BatchSize = 1,
+            ClaimTimeout = 30,
+            FatalOnLeaseTimeout = false,
+            OnError = exception =>
+                completionSource.TrySetException(exception)
+        };
 
-        using CancellationTokenSource cts = new CancellationTokenSource();
+        /*
+         * New worker constructor:
+         *
+         * - WorkerOptions
+         * - ISqlFlow
+         * - ISqlFlowDispatcher
+         */
+        var worker = new SqlFlowWorker(
+            workerOptions,
+            client,
+            dispatcher);
 
-        // Run worker in background
-        Task workerTask = worker.ExecuteAsync(cts.Token);
+        using var workerCancellation =
+            new CancellationTokenSource();
 
-        // Wait for the task to complete (or timeout after 5s)
-        Task completedTask = await Task.WhenAny(completionSource.Task, Task.Delay(5000));
+        dispatcher.RegisterQueue(queueName);
 
-        // Stop worker
-        cts.Cancel();
+        Task workerTask =
+            worker.ExecuteAsync(workerCancellation.Token);
 
         try
         {
-            await workerTask;
-        }
-        catch (OperationCanceledException) { }
+            // Act
+            await client.SpawnAsync(
+                new SpawnOptions
+                {
+                    Queue = queueName
+                },
+                taskName,
+                new
+                {
+                    a = 10,
+                    b = 20
+                },
+                CancellationToken.None);
 
-        if (completedTask != completionSource.Task)
+            /*
+             * In production, PostgresQueueSignalListener receives the
+             * PostgreSQL NOTIFY and calls the dispatcher.
+             *
+             * This test invokes that boundary directly so that it tests
+             * worker execution independently of the listener lifecycle.
+             */
+            dispatcher.Signal(queueName);
+
+            int result;
+
+            try
+            {
+                result = await completionSource.Task.WaitAsync(
+                    TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail(
+                    "Task execution timed out after five seconds.");
+
+                return;
+            }
+
+            // Assert
+            Assert.AreEqual(
+                30,
+                result,
+                "The worker should have summed 10 + 20 to get 30.");
+        }
+        finally
         {
-            Assert.Fail("Task execution timed out.");
+            dispatcher.UnregisterQueue(queueName);
+
+            await workerCancellation.CancelAsync();
+
+            try
+            {
+                await workerTask;
+            }
+            catch (OperationCanceledException)
+                when (workerCancellation.IsCancellationRequested)
+            {
+                // Expected during worker shutdown.
+            }
+        }
+    }
+
+    private sealed class TestSqlFlowDispatcher
+        : ISqlFlowDispatcher
+    {
+        private readonly ConcurrentDictionary<
+            string,
+            Channel<bool>> _queueSignals =
+                new(StringComparer.Ordinal);
+
+        public void RegisterQueue(string queueName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+
+            Channel<bool> channel = _queueSignals.GetOrAdd(
+                queueName,
+                static _ => CreateChannel());
+
+            /*
+             * Schedule one initial reconciliation. This also covers work
+             * that was created before the worker was started.
+             */
+            channel.Writer.TryWrite(true);
         }
 
-        int result = await completionSource.Task;
+        public void UnregisterQueue(string queueName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
-        Assert.AreEqual(30, result, "The worker should have summed 10 + 20 to get 30.");
+            if (_queueSignals.TryRemove(
+                    queueName,
+                    out Channel<bool>? channel))
+            {
+                channel.Writer.TryComplete();
+            }
+        }
+
+        public void Signal(string queueName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+
+            Channel<bool> channel = _queueSignals.GetOrAdd(
+                queueName,
+                static _ => CreateChannel());
+
+            /*
+             * Capacity is one, so repeated notifications are coalesced.
+             */
+            channel.Writer.TryWrite(true);
+        }
+
+        public async ValueTask WaitForWorkAsync(
+            string queueName,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+
+            Channel<bool> channel = _queueSignals.GetOrAdd(
+                queueName,
+                static _ => CreateChannel());
+
+            using var timeoutCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+
+            timeoutCancellation.CancelAfter(timeout);
+
+            try
+            {
+                await channel.Reader
+                    .ReadAsync(timeoutCancellation.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                /*
+                 * This was only the reconciliation timeout.
+                 * Return normally so the worker attempts another claim.
+                 */
+            }
+        }
+
+        private static Channel<bool> CreateChannel()
+        {
+            return Channel.CreateBounded<bool>(
+                new BoundedChannelOptions(1)
+                {
+                    SingleReader = false,
+                    SingleWriter = false,
+                    AllowSynchronousContinuations = false,
+                    FullMode = BoundedChannelFullMode.DropWrite
+                });
+        }
     }
 }
