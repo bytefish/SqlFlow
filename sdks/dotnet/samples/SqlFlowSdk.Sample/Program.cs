@@ -1,7 +1,6 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using Microsoft.AspNetCore.Mvc;
-using SqlFlowSdk.Extensions;
 using SqlFlowSdk.Core;
 using SqlFlowSdk.Sample.Models;
 using SqlFlowSdk.Sample.Services;
