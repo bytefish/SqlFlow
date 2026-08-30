@@ -39,7 +39,7 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<IEnumerable<string>> ListQueuesAsync(DbConnection conn, CancellationToken cancellationToken)
+    public async Task<List<string>> ListQueuesAsync(DbConnection conn, CancellationToken cancellationToken)
     {
         List<string> results = new();
 
@@ -98,7 +98,7 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken)
+    public async Task<List<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken)
     {
         List<ClaimedTask> tasks = new();
 
@@ -154,7 +154,7 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<IEnumerable<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string queue, string taskId, string runId, CancellationToken cancellationToken)
+    public async Task<List<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string queue, string taskId, string runId, CancellationToken cancellationToken)
     {
         List<CheckpointRow> rows = new();
 

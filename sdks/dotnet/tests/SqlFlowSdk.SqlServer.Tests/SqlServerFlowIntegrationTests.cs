@@ -6,12 +6,14 @@ using SqlFlowSdk.Core;
 using SqlFlowSdk.Database;
 using SqlFlowSdk.SqlServer.Database;
 using SqlFlowSdk.Workers;
+using System.Collections.Concurrent;
 using System.Data.Common;
+using System.Threading.Channels;
 
 namespace SqlFlowSdk.SqlServer.Tests;
 
 [TestClass]
-public class PostgresFlowIntegrationTests
+public class SqlServerFlowIntegrationTests
 {
     private static string ConnectionString = null!;
 
@@ -25,86 +27,289 @@ public class PostgresFlowIntegrationTests
     {
         await DockerContainers.StartAllContainersAsync();
 
-        // Updated to use the PostgresContainer from the DockerContainers setup
-        ConnectionString = DockerContainers.SqlServerContainer.GetConnectionString();
+        ConnectionString = DockerContainers.ConnectionString;
     }
-
     [TestMethod]
     public async Task Test_BasicTaskExecution_Flow()
     {
-        // ARRANGE
+
+        // Arrange
+        const string queueName = "test-queue";
+        const string taskName = "add-numbers";
 
         await using DbDataSource dataSource = SqlClientFactory.Instance.CreateDataSource(ConnectionString);
 
-        ISqlFlowDatabase db = new SqlServerFlowDatabase();
+        ISqlFlowDatabase database = new SqlServerFlowDatabase();
 
-        ISqlFlow client = new SqlFlow(NullLogger<SqlFlow>.Instance, dataSource, db);
+        await using var client = new SqlFlow(
+            NullLogger<SqlFlow>.Instance,
+            dataSource,
+            database);
 
-        // We use a TCS to signal when the background worker has actually finished the task
-        var completionSource = new TaskCompletionSource<int>();
+        var signalListener =
+            new TestQueueSignalListener();
 
-        // Ensure the test queue exists
-        await client.CreateQueueAsync("test-queue", default);
-
-        // Define the Task Logic
-        client.RegisterTask(new TaskRegistrationOptions
-        {
-            Name = "add-numbers"
-        }, async (ctx, parameters, ct) =>
-        {
-            if (parameters == null)
+        var signalOptions =
+            new QueueSignalOptions
             {
-                throw new InvalidOperationException("Expected JsonObject parameters");
-            }
-            // Extract inputs
-            int a = parameters["a"]?.GetValue<int>() ?? 0;
-            int b = parameters["b"]?.GetValue<int>() ?? 0;
+                ReconciliationInterval =
+                    TimeSpan.FromSeconds(30),
 
-            var sum = a + b;
+                ReconnectDelay =
+                    TimeSpan.Zero
+            };
 
-            // Signal the test that we are done
-            completionSource.SetResult(sum);
+        var dispatcher =
+            new SqlFlowDispatcher(
+                client,
+                signalListener,
+                signalOptions,
+                NullLogger<SqlFlowDispatcher>.Instance);
 
-            return new { result = sum };
-        });
+        var completionSource =
+            new TaskCompletionSource<int>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // ACT
+        await client.CreateQueueAsync(
+            queueName,
+            CancellationToken.None);
 
-        await client.SpawnAsync(new SpawnOptions { Queue = "test-queue" }, "add-numbers", new { a = 10, b = 20 }, default);
+        client.RegisterTask(
+            new TaskRegistrationOptions
+            {
+                Name = taskName
+            },
+            (context, parameters, cancellationToken) =>
+            {
+                if (parameters is null)
+                {
+                    throw new InvalidOperationException(
+                        "Expected task parameters.");
+                }
 
-        // 4. Worker exakt nach deiner Konstruktor-Signatur instanziieren
-        SqlFlowWorker worker = new SqlFlowWorker(new WorkerOptions
-        {
-            Queue = "test-queue",
-            PollInterval = 0.1, // Fast polling for tests
-            Concurrency = 1,
-            WorkerId = "test-worker"
-        }, client);
+                int a =
+                    parameters["a"]?.GetValue<int>() ?? 0;
 
-        using CancellationTokenSource cts = new CancellationTokenSource();
+                int b =
+                    parameters["b"]?.GetValue<int>() ?? 0;
 
-        // Run worker in background
-        Task workerTask = worker.ExecuteAsync(cts.Token);
+                int sum = a + b;
 
-        // Wait for the task to complete (or timeout after 5s)
-        Task completedTask = await Task.WhenAny(completionSource.Task, Task.Delay(5000));
+                completionSource.TrySetResult(sum);
 
-        // Stop worker
-        cts.Cancel();
+                return Task.FromResult<object>(
+                    new
+                    {
+                        result = sum
+                    });
+            });
+
+        var workerOptions =
+            new WorkerOptions
+            {
+                Queue = queueName,
+                Concurrency = 1,
+                WorkerId =
+                    $"test-worker-{Guid.NewGuid():N}",
+                BatchSize = 1,
+                ClaimTimeout = 30,
+                FatalOnLeaseTimeout = false,
+                OnError = exception =>
+                    completionSource.TrySetException(exception)
+            };
+
+        using var workerCancellation =
+            new CancellationTokenSource();
+
+        /*
+         * The dispatcher replaces the old SqlFlowWorker.
+         *
+         * RunWorkerAsync starts the producer and consumer loops for
+         * this queue and continues running until cancellation.
+         */
+        Task dispatcherTask =
+            dispatcher.RunWorkerAsync(
+                workerOptions,
+                workerCancellation.Token);
 
         try
         {
-            await workerTask;
-        }
-        catch (OperationCanceledException) { }
+            // Act
+            await client.SpawnAsync(
+                new SpawnOptions
+                {
+                    Queue = queueName
+                },
+                taskName,
+                new
+                {
+                    a = 10,
+                    b = 20
+                },
+                CancellationToken.None);
 
-        if (completedTask != completionSource.Task)
+            /*
+             * In production, PostgresQueueSignalListener receives
+             * PostgreSQL NOTIFY and wakes the dispatcher.
+             *
+             * This test injects a controllable signal listener and
+             * triggers the wake-up explicitly.
+             */
+            signalListener.Signal(queueName);
+
+            int result;
+
+            try
+            {
+                result =
+                    await completionSource.Task.WaitAsync(
+                        TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail(
+                    "Task execution timed out after five seconds.");
+
+                return;
+            }
+
+            // Assert
+            Assert.AreEqual(
+                30,
+                result,
+                "The worker should have summed 10 + 20 to get 30.");
+        }
+        finally
         {
-            Assert.Fail("Task execution timed out.");
+            await workerCancellation.CancelAsync();
+
+            try
+            {
+                await dispatcherTask;
+            }
+            catch (OperationCanceledException)
+                when (workerCancellation.IsCancellationRequested)
+            {
+                // Expected during dispatcher shutdown.
+            }
+        }
+    }
+
+    private sealed class TestQueueSignalListener :
+        IQueueSignalListener
+    {
+        private readonly ConcurrentDictionary<
+            string,
+            Channel<bool>> _queueSignals =
+                new(StringComparer.Ordinal);
+
+        public void RegisterQueue(string queueName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+
+            Channel<bool> newChannel =
+                CreateChannel();
+
+            Channel<bool> actualChannel =
+                _queueSignals.GetOrAdd(
+                    queueName,
+                    newChannel);
+
+            if (ReferenceEquals(
+                    newChannel,
+                    actualChannel))
+            {
+                /*
+                 * Perform one initial reconciliation when the queue is
+                 * registered for the first time.
+                 *
+                 * This covers work that existed before the dispatcher
+                 * started.
+                 */
+                actualChannel.Writer.TryWrite(true);
+            }
         }
 
-        int result = await completionSource.Task;
+        public async ValueTask<bool> WaitAsync(
+            string queueName,
+            TimeSpan fallbackTimeout,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
-        Assert.AreEqual(30, result, "The worker should have summed 10 + 20 to get 30.");
+            if (fallbackTimeout <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(fallbackTimeout),
+                    "The fallback timeout must be greater than zero.");
+            }
+
+            if (!_queueSignals.TryGetValue(
+                    queueName,
+                    out Channel<bool>? channel))
+            {
+                RegisterQueue(queueName);
+
+                channel = _queueSignals[queueName];
+            }
+
+            using CancellationTokenSource timeoutCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+
+            timeoutCancellation.CancelAfter(
+                fallbackTimeout);
+
+            try
+            {
+                await channel.Reader
+                    .ReadAsync(timeoutCancellation.Token)
+                    .ConfigureAwait(false);
+
+                return true;
+            }
+            catch (OperationCanceledException)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                /*
+                 * Only the reconciliation timeout elapsed.
+                 * The dispatcher should perform another claim attempt.
+                 */
+                return false;
+            }
+        }
+
+        public void Signal(string queueName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+
+            if (!_queueSignals.TryGetValue(
+                    queueName,
+                    out Channel<bool>? channel))
+            {
+                RegisterQueue(queueName);
+
+                channel = _queueSignals[queueName];
+            }
+
+            /*
+             * The channel has capacity one, so repeated signals are
+             * intentionally coalesced.
+             */
+            channel.Writer.TryWrite(true);
+        }
+
+        private static Channel<bool> CreateChannel()
+        {
+            return Channel.CreateBounded<bool>(
+                new BoundedChannelOptions(1)
+                {
+                    SingleReader = true,
+                    SingleWriter = false,
+                    AllowSynchronousContinuations = false,
+                    FullMode =
+                        BoundedChannelFullMode.DropWrite
+                });
+        }
     }
 }

@@ -7,7 +7,6 @@ using SqlFlowSdk.Core;
 using SqlFlowSdk.Database;
 using SqlFlowSdk.Workers;
 using System.Collections.Concurrent;
-using System.Data.Common;
 using System.Threading.Channels;
 
 namespace SqlFlowSdk.Postgres.Tests;
@@ -17,9 +16,6 @@ public class PostgresFlowIntegrationTests
 {
     private static string ConnectionString = null!;
 
-    /// <summary>
-    /// Starts the containers for the tests.
-    /// </summary>
     [AssemblyInitialize]
     public static async Task AssemblyInitializeAsync(
         TestContext context)
@@ -48,7 +44,25 @@ public class PostgresFlowIntegrationTests
             dataSource,
             database);
 
-        var dispatcher = new TestSqlFlowDispatcher();
+        var signalListener =
+            new TestQueueSignalListener();
+
+        var signalOptions =
+            new QueueSignalOptions
+            {
+                ReconciliationInterval =
+                    TimeSpan.FromSeconds(30),
+
+                ReconnectDelay =
+                    TimeSpan.Zero
+            };
+
+        var dispatcher =
+            new SqlFlowDispatcher(
+                client,
+                signalListener,
+                signalOptions,
+                NullLogger<SqlFlowDispatcher>.Instance);
 
         var completionSource =
             new TaskCompletionSource<int>(
@@ -88,37 +102,33 @@ public class PostgresFlowIntegrationTests
                     });
             });
 
-        var workerOptions = new WorkerOptions
-        {
-            Queue = queueName,
-            Concurrency = 1,
-            WorkerId = $"test-worker-{Guid.NewGuid():N}",
-            BatchSize = 1,
-            ClaimTimeout = 30,
-            FatalOnLeaseTimeout = false,
-            OnError = exception =>
-                completionSource.TrySetException(exception)
-        };
-
-        /*
-         * New worker constructor:
-         *
-         * - WorkerOptions
-         * - ISqlFlow
-         * - ISqlFlowDispatcher
-         */
-        var worker = new SqlFlowWorker(
-            workerOptions,
-            client,
-            dispatcher);
+        var workerOptions =
+            new WorkerOptions
+            {
+                Queue = queueName,
+                Concurrency = 1,
+                WorkerId =
+                    $"test-worker-{Guid.NewGuid():N}",
+                BatchSize = 1,
+                ClaimTimeout = 30,
+                FatalOnLeaseTimeout = false,
+                OnError = exception =>
+                    completionSource.TrySetException(exception)
+            };
 
         using var workerCancellation =
             new CancellationTokenSource();
 
-        dispatcher.RegisterQueue(queueName);
-
-        Task workerTask =
-            worker.ExecuteAsync(workerCancellation.Token);
+        /*
+         * The dispatcher replaces the old SqlFlowWorker.
+         *
+         * RunWorkerAsync starts the producer and consumer loops for
+         * this queue and continues running until cancellation.
+         */
+        Task dispatcherTask =
+            dispatcher.RunWorkerAsync(
+                workerOptions,
+                workerCancellation.Token);
 
         try
         {
@@ -137,20 +147,21 @@ public class PostgresFlowIntegrationTests
                 CancellationToken.None);
 
             /*
-             * In production, PostgresQueueSignalListener receives the
-             * PostgreSQL NOTIFY and calls the dispatcher.
+             * In production, PostgresQueueSignalListener receives
+             * PostgreSQL NOTIFY and wakes the dispatcher.
              *
-             * This test invokes that boundary directly so that it tests
-             * worker execution independently of the listener lifecycle.
+             * This test injects a controllable signal listener and
+             * triggers the wake-up explicitly.
              */
-            dispatcher.Signal(queueName);
+            signalListener.Signal(queueName);
 
             int result;
 
             try
             {
-                result = await completionSource.Task.WaitAsync(
-                    TimeSpan.FromSeconds(5));
+                result =
+                    await completionSource.Task.WaitAsync(
+                        TimeSpan.FromSeconds(5));
             }
             catch (TimeoutException)
             {
@@ -168,24 +179,22 @@ public class PostgresFlowIntegrationTests
         }
         finally
         {
-            dispatcher.UnregisterQueue(queueName);
-
             await workerCancellation.CancelAsync();
 
             try
             {
-                await workerTask;
+                await dispatcherTask;
             }
             catch (OperationCanceledException)
                 when (workerCancellation.IsCancellationRequested)
             {
-                // Expected during worker shutdown.
+                // Expected during dispatcher shutdown.
             }
         }
     }
 
-    private sealed class TestSqlFlowDispatcher
-        : ISqlFlowDispatcher
+    private sealed class TestQueueSignalListener :
+        IQueueSignalListener
     {
         private readonly ConcurrentDictionary<
             string,
@@ -196,26 +205,75 @@ public class PostgresFlowIntegrationTests
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
-            Channel<bool> channel = _queueSignals.GetOrAdd(
-                queueName,
-                static _ => CreateChannel());
+            Channel<bool> newChannel =
+                CreateChannel();
 
-            /*
-             * Schedule one initial reconciliation. This also covers work
-             * that was created before the worker was started.
-             */
-            channel.Writer.TryWrite(true);
+            Channel<bool> actualChannel =
+                _queueSignals.GetOrAdd(
+                    queueName,
+                    newChannel);
+
+            if (ReferenceEquals(
+                    newChannel,
+                    actualChannel))
+            {
+                /*
+                 * Perform one initial reconciliation when the queue is
+                 * registered for the first time.
+                 *
+                 * This covers work that existed before the dispatcher
+                 * started.
+                 */
+                actualChannel.Writer.TryWrite(true);
+            }
         }
 
-        public void UnregisterQueue(string queueName)
+        public async ValueTask<bool> WaitAsync(
+            string queueName,
+            TimeSpan fallbackTimeout,
+            CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
-            if (_queueSignals.TryRemove(
+            if (fallbackTimeout <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(fallbackTimeout),
+                    "The fallback timeout must be greater than zero.");
+            }
+
+            if (!_queueSignals.TryGetValue(
                     queueName,
                     out Channel<bool>? channel))
             {
-                channel.Writer.TryComplete();
+                RegisterQueue(queueName);
+
+                channel = _queueSignals[queueName];
+            }
+
+            using CancellationTokenSource timeoutCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+
+            timeoutCancellation.CancelAfter(
+                fallbackTimeout);
+
+            try
+            {
+                await channel.Reader
+                    .ReadAsync(timeoutCancellation.Token)
+                    .ConfigureAwait(false);
+
+                return true;
+            }
+            catch (OperationCanceledException)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                /*
+                 * Only the reconciliation timeout elapsed.
+                 * The dispatcher should perform another claim attempt.
+                 */
+                return false;
             }
         }
 
@@ -223,47 +281,20 @@ public class PostgresFlowIntegrationTests
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
-            Channel<bool> channel = _queueSignals.GetOrAdd(
-                queueName,
-                static _ => CreateChannel());
+            if (!_queueSignals.TryGetValue(
+                    queueName,
+                    out Channel<bool>? channel))
+            {
+                RegisterQueue(queueName);
+
+                channel = _queueSignals[queueName];
+            }
 
             /*
-             * Capacity is one, so repeated notifications are coalesced.
+             * The channel has capacity one, so repeated signals are
+             * intentionally coalesced.
              */
             channel.Writer.TryWrite(true);
-        }
-
-        public async ValueTask WaitForWorkAsync(
-            string queueName,
-            TimeSpan timeout,
-            CancellationToken cancellationToken)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
-
-            Channel<bool> channel = _queueSignals.GetOrAdd(
-                queueName,
-                static _ => CreateChannel());
-
-            using var timeoutCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken);
-
-            timeoutCancellation.CancelAfter(timeout);
-
-            try
-            {
-                await channel.Reader
-                    .ReadAsync(timeoutCancellation.Token)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-                when (!cancellationToken.IsCancellationRequested)
-            {
-                /*
-                 * This was only the reconciliation timeout.
-                 * Return normally so the worker attempts another claim.
-                 */
-            }
         }
 
         private static Channel<bool> CreateChannel()
@@ -271,10 +302,11 @@ public class PostgresFlowIntegrationTests
             return Channel.CreateBounded<bool>(
                 new BoundedChannelOptions(1)
                 {
-                    SingleReader = false,
+                    SingleReader = true,
                     SingleWriter = false,
                     AllowSynchronousContinuations = false,
-                    FullMode = BoundedChannelFullMode.DropWrite
+                    FullMode =
+                        BoundedChannelFullMode.DropWrite
                 });
         }
     }
