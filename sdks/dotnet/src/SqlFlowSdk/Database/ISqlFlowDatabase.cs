@@ -35,7 +35,7 @@ public interface ISqlFlowDatabase
     /// <param name="conn">The database connection to use.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A collection of queue names.</returns>
-    Task<IEnumerable<string>> ListQueuesAsync(DbConnection conn, CancellationToken cancellationToken);
+    Task<List<string>> ListQueuesAsync(DbConnection conn, CancellationToken cancellationToken);
 
     /// <summary>
     /// Spawns a new task in the specified queue with the given parameters and options.
@@ -78,7 +78,7 @@ public interface ISqlFlowDatabase
     /// <param name="count">The maximum number of tasks to claim.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A collection of <see cref="ClaimedTask"/> representing the tasks successfully claimed by the worker.</returns>
-    Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken);
+    Task<List<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken);
 
     /// <summary>
     /// Marks a task run as successfully completed and persists its final result.
@@ -109,7 +109,7 @@ public interface ISqlFlowDatabase
     /// <param name="runId">The current run identifier requesting the checkpoints.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A collection of <see cref="CheckpointRow"/> representing the saved steps.</returns>
-    Task<IEnumerable<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string queue, string taskId, string runId, CancellationToken cancellationToken);
+    Task<List<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string queue, string taskId, string runId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Retrieves the state of a single specific checkpoint for a task.

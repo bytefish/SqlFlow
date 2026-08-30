@@ -10,6 +10,7 @@ using SqlFlowSdk.Core;
 using SqlFlowSdk.Extensions;
 using SqlFlowSdk.Management.AspNetCore;
 using SqlFlowSdk.Management.Postgres;
+using SqlFlowSdk.Postgres;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -49,25 +50,26 @@ builder.Services.AddSingleton<ILlmService, LlmService>();
 builder.Services.AddSingleton<IGitHubService, GitHubService>();
 builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationService>();
 
-// Register the SqlFlow SDK
-builder.Services.AddSqlFlowSdk(connectionString);
-builder.Services.AddSqlFlowQueryApi(connectionString);
-builder.Services.AddSqlFlowAdminApi(connectionString);
-
 // Configure Workers and Jobs. In this example, we have a queue for AI agents that process tasks related to bug fixing. The
 // worker is configured to handle one task at a time and poll for new tasks every second. The job "solve-bug" is defined
 // with a maximum of 3 attempts for each task.
-builder.Services.AddSqlFlowWorker("ai-agent-queue", worker =>
-{
-    worker
-        .SetConcurrency(1)
-        .SetPollInterval(1);
-
-    worker.AddJob<AutonomousAgentJob, AgentTask, AgentResult>("solve-bug", options =>
+builder.Services
+    .AddSqlFlowPostgres(connectionString)
+    .AddWorker("ai-agent-queue", worker =>
     {
-        options.WithMaxAttempts(3);
+        worker
+            .SetConcurrency(1)
+            .SetPollInterval(1);
+
+        worker.AddJob<AutonomousAgentJob, AgentTask, AgentResult>("solve-bug", options =>
+        {
+            options.WithMaxAttempts(3);
+        });
     });
-});
+
+// Register the SqlFlow SDK
+builder.Services.AddSqlFlowQueryApi(connectionString);
+builder.Services.AddSqlFlowAdminApi(connectionString);
 
 var app = builder.Build();
 
@@ -81,7 +83,10 @@ app
     .MapSqlFlowAdminEndpoints();
 
 // A Webhook triggers the Agent, such as a new JIRA ticket or GitHub issue
-app.MapPost("/agent/start", async (ISqlFlow client, [FromBody] AgentTask task, CancellationToken ct) =>
+app.MapPost("/agent/start", async (
+    [FromServices] ISqlFlow client, 
+    [FromBody] AgentTask task,
+    CancellationToken ct) =>
 {
     var result = await client.SpawnAsync(new SpawnOptions
     {
@@ -93,9 +98,9 @@ app.MapPost("/agent/start", async (ISqlFlow client, [FromBody] AgentTask task, C
 
 // A Lead-Developer clicks on "Approve" or "Reject", with Feeedback
 app.MapPost("/agent/review/{issueId}/{correlationId}", async (
-    IEventPublisher publisher,
-    string issueId,
-    string correlationId,
+    [FromServices] IEventPublisher publisher,
+    [FromRoute] string issueId,
+    [FromRoute] string correlationId,
     [FromBody] HumanApproval approval,
     CancellationToken ct) =>
 {

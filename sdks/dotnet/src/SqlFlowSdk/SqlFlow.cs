@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using SqlFlowSdk.Core;
 using SqlFlowSdk.Database;
 using SqlFlowSdk.Exceptions;
+using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Text.Json;
 
@@ -21,34 +22,39 @@ public class SqlFlow : ISqlFlow, IDisposable, IAsyncDisposable
     private readonly ILogger _logger;
     private readonly DbDataSource _dataSource;
     private readonly ISqlFlowDatabase _db;
-    private readonly Dictionary<string, RegisteredTask> _registry;
+    private readonly ConcurrentDictionary<string, RegisteredTask> _registry = new(StringComparer.Ordinal);
 
     public SqlFlow(ILogger<SqlFlow> logger, DbDataSource dataSource, ISqlFlowDatabase db)
     {
         _logger = logger;
         _dataSource = dataSource;
         _db = db;
-        _registry = new Dictionary<string, RegisteredTask>();
     }
 
     /// <summary>
     /// Registers a task handler with the SqlFlow client. This allows the client to execute tasks of the specified type when they are claimed.
     /// </summary>
-    public void RegisterTask(TaskRegistrationOptions options, TaskHandler handler)
-    {
-        if (string.IsNullOrEmpty(options.Name))
-        {
-            throw new ArgumentException("Task registration requires a name");
-        }
+public void RegisterTask(
+    TaskRegistrationOptions options,
+    TaskHandler handler)
+{
+    ArgumentNullException.ThrowIfNull(options);
+    ArgumentNullException.ThrowIfNull(handler);
+    ArgumentException.ThrowIfNullOrWhiteSpace(options.Name);
 
-        _registry[options.Name] = new RegisteredTask
-        {
-            Name = options.Name,
-            DefaultMaxAttempts = options.DefaultMaxAttempts,
-            DefaultCancellation = options.DefaultCancellation,
-            Handler = handler
-        };
+    RegisteredTask registration = new()
+    {
+        Name = options.Name,
+        DefaultMaxAttempts = options.DefaultMaxAttempts,
+        DefaultCancellation = options.DefaultCancellation,
+        Handler = handler
+    };
+
+    if (!_registry.TryAdd(options.Name, registration))
+    {
+        throw new InvalidOperationException($"Task '{options.Name}' is already registered.");
     }
+}
 
     /// <summary>
     /// Creates a new queue with the specified name. Queues are used to organize tasks and determine which workers can claim 
@@ -179,84 +185,266 @@ public class SqlFlow : ISqlFlow, IDisposable, IAsyncDisposable
     /// a task execution, including invoking the handler, managing timeouts, handling exceptions, and marking the task 
     /// as completed or failed in the database.
     /// </summary>
-    public async Task ExecuteTaskAsync(ClaimedTask task, string queue, int claimTimeout, CancellationToken stoppingToken, bool fatalOnLeaseTimeout = false)
+    public async Task ExecuteTaskAsync(
+     ClaimedTask task,
+     string queue,
+     int claimTimeout,
+     CancellationToken stoppingToken,
+     bool fatalOnLeaseTimeout = false)
     {
-        using CancellationTokenSource timeoutCts = new CancellationTokenSource();
-        using CancellationTokenSource linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, timeoutCts.Token);
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
 
-        _ = Task
-            .Delay(claimTimeout * 1000, timeoutCts.Token)
-            .ContinueWith(t =>
-            {
-                if (!t.IsCanceled)
-                {
-                    _logger.LogWarning($"Task {task.TaskName} ({task.TaskId}) exceeded claim timeout of {claimTimeout}s");
-                }
-            }, TaskScheduler.Default);
+        if (claimTimeout <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(claimTimeout),
+                "Claim timeout must be greater than zero.");
+        }
 
-        await using DbConnection conn = await _dataSource.OpenConnectionAsync(stoppingToken).ConfigureAwait(false);
+        await using DbConnection connection =
+            await _dataSource
+                .OpenConnectionAsync(stoppingToken)
+                .ConfigureAwait(false);
+
+        using var warningCts = new CancellationTokenSource();
+        using var executionCts =
+            CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+
+        Task warningTask = WarnAboutLeaseTimeoutAsync(
+            task,
+            claimTimeout,
+            warningCts.Token);
 
         try
         {
-            RegisteredTask? registration = _registry.ContainsKey(task.TaskName) ? _registry[task.TaskName] : null;
-
-            TaskContext ctx = await TaskContext.CreateAsync(_logger, task.TaskId, conn, _db, queue, task, claimTimeout, linkedCts.Token).ConfigureAwait(false);
-
-            if (registration == null)
+            /*
+             * Check the registration before loading checkpoints.
+             *
+             * If no handler is registered, throwing here causes the run to be
+             * persisted as failed through the normal failure path below.
+             */
+            if (!_registry.TryGetValue(
+                    task.TaskName,
+                    out RegisteredTask? registration))
             {
-                throw new Exception($"Unknown task: {task.TaskName}");
+                throw new UnknownTaskRegistrationException(
+                    $"No handler is registered for task '{task.TaskName}'.");
             }
 
-            Task<object> handlerTask = registration.Handler(ctx, task.Params, linkedCts.Token);
+            TaskContext context = await TaskContext.CreateAsync(
+                _logger,
+                task.TaskId,
+                connection,
+                _db,
+                queue,
+                task,
+                claimTimeout,
+                executionCts.Token
+            ).ConfigureAwait(false);
 
-            Task fatalTask = Task.Delay(Timeout.Infinite, timeoutCts.Token);
+            Task<object> handlerTask = registration.Handler(
+                context,
+                task.Params,
+                executionCts.Token);
+
+            object result;
 
             if (fatalOnLeaseTimeout)
             {
-                fatalTask = Task
-                    .Delay(claimTimeout * 1000 * 2, timeoutCts.Token)
-                    .ContinueWith(t =>
-                    {
-                        if (!t.IsCanceled)
-                        {
-                            throw new FatalLeaseTimeoutException($"Task {task.TaskName} ({task.TaskId}) exceeded claim timeout by 2x.");
-                        }
-                    }, TaskScheduler.Default);
+                TimeSpan fatalTimeout =
+                    TimeSpan.FromSeconds(checked(claimTimeout * 2L));
+
+                try
+                {
+                    result = await handlerTask
+                        .WaitAsync(fatalTimeout, stoppingToken)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException timeoutException)
+                {
+                    /*
+                     * Request cancellation of the handler. A handler still needs
+                     * to observe its CancellationToken for cooperative shutdown.
+                     */
+                    await executionCts.CancelAsync().ConfigureAwait(false);
+
+                    throw new FatalLeaseTimeoutException(
+                        $"Task {task.TaskName} ({task.TaskId}) exceeded " +
+                        $"the fatal lease timeout of {fatalTimeout.TotalSeconds:0} seconds.",
+                        timeoutException);
+                }
             }
-
-            Task finishedTask = await Task.WhenAny(handlerTask, fatalTask).ConfigureAwait(false);
-
-            if (finishedTask == fatalTask)
+            else
             {
-                await fatalTask.ConfigureAwait(false);
+                /*
+                 * Without FatalOnLeaseTimeout, exceeding the lease only causes
+                 * a warning. The handler continues until it finishes, fails,
+                 * suspends, or the host shuts down.
+                 */
+                result = await handlerTask.ConfigureAwait(false);
             }
 
-            object result = await handlerTask.ConfigureAwait(false);
+            string resultJson = JsonSerializer.Serialize(result);
 
-            await _db.CompleteRunAsync(conn, queue, task.RunId, JsonSerializer.Serialize(result), linkedCts.Token).ConfigureAwait(false);
+            await _db.CompleteRunAsync(
+                connection,
+                queue,
+                task.RunId,
+                resultJson,
+                stoppingToken
+            ).ConfigureAwait(false);
         }
-        catch (Exception err)
+        catch (SuspendTaskException)
         {
-            if (err is SuspendTaskException || err is CancelledTaskException) return;
+            /*
+             * SleepUntil or AwaitEvent already changed the run to sleeping.
+             * Nothing else needs to be persisted here.
+             */
+        }
+        catch (CancelledTaskException)
+        {
+            /*
+             * The database reported that the task was cancelled.
+             * Do not convert cancellation into a failure.
+             */
+        }
+        catch (OperationCanceledException)
+            when (stoppingToken.IsCancellationRequested)
+        {
+            /*
+             * Normal application shutdown.
+             *
+             * Do not mark the task as failed. The worker shutdown path should
+             * release its claims, or expired-claim recovery should make the run
+             * available again.
+             */
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(
+                exception,
+                "Task {TaskName} ({TaskId}), run {RunId}, failed",
+                task.TaskName,
+                task.TaskId,
+                task.RunId);
 
-            _logger.LogError($"[ssf] task execution failed: {err.Message}");
+            var failure = new
+            {
+                name = exception.GetType().Name,
+                message = exception.Message,
+                stack = exception.StackTrace
+            };
 
             try
             {
-                var errorObj = new { name = err.GetType().Name, message = err.Message, stack = err.StackTrace };
+                /*
+                 * Do not use executionCts here because it may have been cancelled
+                 * by the fatal-timeout handling.
+                 *
+                 * Give failure persistence its own bounded timeout.
+                 */
+                using var persistenceCts =
+                    new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-                await _db.FailRunAsync(conn, queue, task.RunId, JsonSerializer.Serialize(errorObj), linkedCts.Token).ConfigureAwait(false);
+                await _db.FailRunAsync(
+                    connection,
+                    queue,
+                    task.RunId,
+                    JsonSerializer.Serialize(failure),
+                    persistenceCts.Token
+                ).ConfigureAwait(false);
             }
-            catch (Exception failErr)
+            catch (Exception failException)
             {
-                _logger.LogError($"Failed to mark run as failed: {failErr.Message}");
+                _logger.LogError(
+                    failException,
+                    "Could not mark run {RunId} as failed",
+                    task.RunId);
             }
 
-            if (err is FatalLeaseTimeoutException) throw;
+            if (exception is FatalLeaseTimeoutException)
+            {
+                throw;
+            }
         }
         finally
         {
-            timeoutCts.Cancel();
+            await warningCts.CancelAsync().ConfigureAwait(false);
+
+            try
+            {
+                await warningTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+                when (warningCts.IsCancellationRequested)
+            {
+                // Expected when execution finishes before the warning timeout.
+            }
+        }
+
+        async Task WarnAboutLeaseTimeoutAsync(
+            ClaimedTask claimedTask,
+            int timeoutSeconds,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(
+                    TimeSpan.FromSeconds(timeoutSeconds),
+                    cancellationToken
+                ).ConfigureAwait(false);
+
+                _logger.LogWarning(
+                    "Task {TaskName} ({TaskId}), run {RunId}, " +
+                    "exceeded its claim timeout of {ClaimTimeout} seconds",
+                    claimedTask.TaskName,
+                    claimedTask.TaskId,
+                    claimedTask.RunId,
+                    timeoutSeconds);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                // The task finished before reaching the warning threshold.
+            }
+        }
+    }
+
+    private async Task TryFailRunAsync(
+    DbConnection connection,
+    string queue,
+    string runId,
+    Exception exception,
+    CancellationToken cancellationToken)
+    {
+        try
+        {
+            string failure = JsonSerializer.Serialize(new
+            {
+                name = exception.GetType().Name,
+                message = exception.Message,
+                stack = exception.StackTrace
+            });
+
+            await _db.FailRunAsync(
+                connection,
+                queue,
+                runId,
+                failure,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (CancelledTaskException)
+        {
+            // Cancellation won the race with failure.
+        }
+        catch (Exception failException)
+        {
+            _logger.LogError(
+                failException,
+                "Failed to mark run {RunId} as failed.",
+                runId);
         }
     }
 

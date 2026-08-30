@@ -40,27 +40,24 @@ public class TaskContext
 
     private TaskContext(
         ILogger logger,
-        string taskId,
-        DbConnection con,
-        ISqlFlowDatabase db,
+        DbConnection connection,
+        ISqlFlowDatabase database,
         string queueName,
         ClaimedTask task,
-        Dictionary<string, JsonNode?> checkpointCache,
+        Dictionary<string, JsonNode?> checkpoints,
         int claimTimeout,
         CancellationToken cancellationToken)
     {
         _logger = logger;
-
-        TaskId = taskId;
-        CancellationToken = cancellationToken;
-
-        _connection = con;
-        _db = db;
+        _connection = connection;
+        _db = database;
         _queueName = queueName;
         _task = task;
-        _checkpointCache = checkpointCache;
+        _checkpointCache = checkpoints;
         _claimTimeout = claimTimeout;
 
+        TaskId = task.TaskId;
+        CancellationToken = cancellationToken;
     }
 
     public static async Task<TaskContext> CreateAsync(
@@ -82,7 +79,7 @@ public class TaskContext
             cache[cp.CheckpointName] = cp.State;
         }
 
-        return new TaskContext(logger, taskId, con, db, queueName, task, cache, claimTimeout, cancellationToken);
+        return new TaskContext(logger, con, db, queueName, task, cache, claimTimeout, cancellationToken);
     }
 
     public async Task<T> Step<T>(string name, Func<Task<T>> fn)
@@ -110,20 +107,25 @@ public class TaskContext
         return rv;
     }
 
-    public Task Step(string name, Func<Task> fn)
+    public Task Step(
+        string name,
+        Func<Task> action)
     {
-        // Wir rufen die generische Methode mit einem Dummy-Typ (bool) auf.
         return Step(name, async () =>
         {
-            await fn().ConfigureAwait(false);
-
-            return true; // Dieser Wert wird als "true" in der DB als Marker gespeichert
+            await action().ConfigureAwait(false);
+            return true;
         });
     }
 
-    public async Task SleepFor(string stepName, double durationSeconds)
+    public Task SleepFor(string stepName, double durationSeconds)
     {
-        await SleepUntil(stepName, DateTime.UtcNow.AddSeconds(durationSeconds)).ConfigureAwait(false);
+        if (durationSeconds < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(durationSeconds));
+        }
+
+        return SleepUntil(stepName, DateTime.UtcNow.AddSeconds(durationSeconds));
     }
 
     public async Task SleepUntil(string stepName, DateTime wakeAt)
