@@ -7,6 +7,7 @@ using SqlFlowSdk.Sample.Models;
 using SqlFlowSdk.Sample.Services;
 using SqlFlowSdk.Sample.Docker;
 using SqlFlowSdk.Sample.Jobs;
+using SqlFlowSdk.Postgres;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,33 +25,31 @@ builder.Services.AddSingleton<ShippingService>();
 builder.Services.AddSingleton<OrderService>();
 
 // Register the SqlServerFlow SDK
-builder.Services.AddSqlFlowSdk(connectionString);
-
-// Configure Workers and Jobs. In this example, we have two different queues
-// for standard and VIP orders, each with its own processing configuration.
-builder.Services.AddSqlFlowWorker("standard-orders-queue", worker =>
-{
-    worker
-        .SetConcurrency(1)
-        .SetPollInterval(1);
-
-    worker.AddJob<FulfillOrderJob, OrderData, FulfillOrderResult>("standard-fulfill", options =>
+builder.Services.AddSqlFlowPostgres(connectionString)
+    // Configure Workers and Jobs. In this example, we have two different queues
+    // for standard and VIP orders, each with its own processing configuration.
+    .AddWorker("standard-orders-queue", worker =>
     {
-        options.WithMaxAttempts(3);
-    });
-});
-
-builder.Services.AddSqlFlowWorker("vip-orders-queue", worker =>
-{
-    worker
-        .SetConcurrency(5)
-        .SetPollInterval(0.5);
-
-    worker.AddJob<FulfillOrderJob, OrderData, FulfillOrderResult>("vip-fulfill", options =>
+        worker
+            .SetConcurrency(1)
+            .SetPollInterval(1);
+    
+        worker.AddJob<FulfillOrderJob, OrderData, FulfillOrderResult>("standard-fulfill", options =>
+        {
+            options.WithMaxAttempts(3);
+        });
+    })
+    .AddWorker("vip-orders-queue", worker =>
     {
-        options.WithMaxAttempts(5);
+        worker
+            .SetConcurrency(5)
+            .SetPollInterval(0.5);
+
+        worker.AddJob<FulfillOrderJob, OrderData, FulfillOrderResult>("vip-fulfill", options =>
+        {
+            options.WithMaxAttempts(5);
+        });
     });
-});
 
 var app = builder.Build();
 
