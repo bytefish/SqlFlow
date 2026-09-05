@@ -2,6 +2,7 @@
 using SqlFlowSdk.Core;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using System.Threading.RateLimiting;
 
 namespace SqlFlowSdk.Workers;
 
@@ -50,10 +51,7 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
         {
             _signals.RegisterQueue(options.Queue);
 
-            await RunQueueAsync(
-                    options,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            await RunQueueAsync(options, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -65,23 +63,23 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
         WorkerOptions options,
         CancellationToken cancellationToken)
     {
+        RateLimiter? rateLimiter = CreateRateLimiter(options);
+
         int capacity = options.Concurrency;
 
-        Channel<ClaimedTask> executionQueue =
-            Channel.CreateBounded<ClaimedTask>(
-                new BoundedChannelOptions(capacity)
-                {
-                    SingleWriter = true,
-                    SingleReader = capacity == 1,
-                    FullMode = BoundedChannelFullMode.Wait,
-                    AllowSynchronousContinuations = false
-                });
+        Channel<ClaimedTask> executionQueue = Channel.CreateBounded<ClaimedTask>(new BoundedChannelOptions(capacity)
+        {
+            SingleWriter = true,
+            SingleReader = capacity == 1,
+            FullMode = BoundedChannelFullMode.Wait,
+            AllowSynchronousContinuations = false
+        });
 
-        using SemaphoreSlim availableCapacity =
-            new(capacity, capacity);
+        using SemaphoreSlim availableCapacity = new(capacity, capacity);
 
         Task producer = ProduceAsync(
             options,
+            rateLimiter,
             executionQueue.Writer,
             availableCapacity,
             cancellationToken);
@@ -109,6 +107,7 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
 
     private async Task ProduceAsync(
         WorkerOptions options,
+        RateLimiter? rateLimiter,
         ChannelWriter<ClaimedTask> writer,
         SemaphoreSlim availableCapacity,
         CancellationToken cancellationToken)
@@ -143,13 +142,26 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
 
                 try
                 {
-                    while (reservedSlots < maximumBatchSize &&
-                           availableCapacity.Wait(0))
+                    while (reservedSlots < maximumBatchSize && availableCapacity.Wait(0))
                     {
                         reservedSlots++;
                     }
 
-                    IReadOnlyList<ClaimedTask> tasks =
+                    if (rateLimiter is not null)
+                    {
+                        RateLimitLease lease = await rateLimiter
+                            .AcquireAsync(reservedSlots, cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (!lease.IsAcquired)
+                        {
+                            availableCapacity.Release(reservedSlots);
+
+                            continue;
+                        }
+                    }
+
+                    IReadOnlyList <ClaimedTask> tasks =
                         (await _client.ClaimTasksAsync(
                                 options.Queue,
                                 options.WorkerId,
@@ -264,6 +276,41 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
         }
     }
 
+    private static RateLimiter? CreateRateLimiter(
+    WorkerOptions options)
+    {
+        if (options.MaxTasksPerSecond is not > 0)
+        {
+            return null;
+        }
+
+        int burstSize =
+            options.RateLimitBurstSize
+            ?? options.MaxTasksPerSecond.Value;
+
+        return new TokenBucketRateLimiter(
+            new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = burstSize,
+
+                TokensPerPeriod =
+                    options.MaxTasksPerSecond.Value,
+
+                ReplenishmentPeriod =
+                    TimeSpan.FromSeconds(1),
+
+                AutoReplenishment = true,
+
+                QueueProcessingOrder =
+                    QueueProcessingOrder.OldestFirst,
+
+                QueueLimit =
+                    Math.Max(
+                        options.Concurrency * 10,
+                        100)
+            });
+    }
+
     private void ReportError(
         WorkerOptions options,
         Exception exception)
@@ -317,6 +364,21 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
             throw new ArgumentOutOfRangeException(
                 nameof(options.ClaimTimeout),
                 "ClaimTimeout must be greater than zero.");
+
+        }
+
+        if (options.MaxTasksPerSecond.HasValue && options.MaxTasksPerSecond is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options.MaxTasksPerSecond),
+                "MaxTasksPerSecond must be greater than zero.");
+        }
+
+        if (options.MaxTasksPerSecond.HasValue && options.RateLimitBurstSize is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options.RateLimitBurstSize),
+                "RateLimitBurstSize must be greater than zero.");
         }
     }
 }

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using SqlFlowSdk.Configuration;
 using SqlFlowSdk.Core;
 using SqlFlowSdk.Workers;
@@ -21,6 +22,20 @@ public class SqlFlowWorkerBuilder
         {
             _registry.JobRegistrationsByQueue[_workerConfig.QueueName] = new();
         }
+    }
+
+    public SqlFlowWorkerBuilder WithMaxTasksPerSecond(int tasksPerSecond, int? burstSize = null)
+    {
+        if (tasksPerSecond <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(tasksPerSecond));
+        }
+
+        _workerConfig.MaxTasksPerSecond = tasksPerSecond;
+        _workerConfig.RateLimitBurstSize = burstSize;
+
+        return this;
     }
 
     public SqlFlowWorkerBuilder SetConcurrency(int concurrency) { _workerConfig.Concurrency = concurrency; return this; }

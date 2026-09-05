@@ -71,4 +71,16 @@ public class WorkerOptions
     /// not complete it within this time, the task will be released back to the queue.
     /// </summary>
     public bool FatalOnLeaseTimeout { get; set; } = true;
+
+    /// <summary>
+    /// Optional rate limit for the number of tasks that can be processed per second. If specified, 
+    /// the worker will ensure that it does not exceed this rate when executing tasks.
+    /// </summary>
+    public int? MaxTasksPerSecond { get; set; }
+
+    /// <summary>
+    /// Rate limit burst size for the number of tasks that can be processed in a short burst. If specified,
+    /// the worker will allow a temporary increase in the processing rate up to this limit.
+    /// </summary>
+    public int? RateLimitBurstSize { get; set; }
 }

@@ -22,6 +22,73 @@ async def _init_connection(conn):
         format="text"
     )
 
+
+import asyncio
+import asyncpg
+
+class PostgresQueueSignalListener(
+    QueueSignalListener
+):
+    def __init__(self, connection_string: str):
+        self._connection_string = (
+            connection_string
+        )
+
+        self._connection = None
+
+        self._queues = {}
+
+    async def start(self):
+        self._connection = (
+            await asyncpg.connect(
+                self._connection_string
+            )
+        )
+
+    async def register_queue(
+        self,
+        queue_name: str
+    ) -> None:
+        if queue_name in self._queues:
+            return
+
+        event = asyncio.Event()
+
+        self._queues[queue_name] = event
+
+        async def callback(
+            connection,
+            pid,
+            channel,
+            payload
+        ):
+            event.set()
+
+        await self._connection.add_listener(
+            f"ssf_{queue_name}",
+            callback
+        )
+
+    async def wait_for_signal(
+        self,
+        queue_name: str,
+        timeout_seconds: float
+    ) -> bool:
+        event = self._queues[queue_name]
+
+        try:
+            await asyncio.wait_for(
+                event.wait(),
+                timeout_seconds
+            )
+
+            event.clear()
+
+            return True
+
+        except asyncio.TimeoutError:
+            return False
+
 class PostgresDriver(DatabaseDriver):
     """
     PostgreSQL implementation of the SqlFlow DatabaseDriver using asyncpg.
