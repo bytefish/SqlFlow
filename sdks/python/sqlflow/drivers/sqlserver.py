@@ -13,6 +13,139 @@ from sqlflow.sdk import DatabaseDriver, SpawnResult
 
 logger = logging.getLogger("sqlflow.sqlserver")
 
+import asyncio
+from typing import Dict
+import aioodbc
+
+class SqlServerQueueSignalListener(
+    QueueSignalListener
+):
+    def __init__(
+        self,
+        connection_string: str
+    ):
+        self._connection_string = (
+            connection_string
+        )
+
+        self._events: Dict[
+            str,
+            asyncio.Event
+        ] = {}
+
+        self._listener_task = None
+
+        self._running = False
+
+    async def start(self) -> None:
+        if self._running:
+            return
+
+        self._running = True
+
+        self._listener_task = (
+            asyncio.create_task(
+                self._listen_loop()
+            )
+        )
+
+    async def stop(self) -> None:
+        self._running = False
+
+        if self._listener_task:
+            self._listener_task.cancel()
+
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
+
+    async def register_queue(
+        self,
+        queue_name: str
+    ) -> None:
+        if queue_name in self._events:
+            return
+
+        self._events[
+            queue_name
+        ] = asyncio.Event()
+
+    async def wait_for_signal(
+        self,
+        queue_name: str,
+        timeout_seconds: float
+    ) -> bool:
+        event = self._events[queue_name]
+
+        try:
+            await asyncio.wait_for(
+                event.wait(),
+                timeout_seconds
+            )
+
+            event.clear()
+
+            return True
+
+        except asyncio.TimeoutError:
+            return False
+
+    async def _listen_loop(self) -> None:
+        pool = await aioodbc.create_pool(
+            dsn=self._connection_string,
+            autocommit=True
+        )
+
+        try:
+            while self._running:
+                try:
+                    async with pool.acquire() as conn:
+                        async with conn.cursor() as cur:
+
+                            await cur.execute("""
+                                EXEC ssf.wait_for_queue_signal
+                                    @p_timeout_ms = 60000
+                            """)
+
+                            row = await cur.fetchone()
+
+                            if row is None:
+                                continue
+
+                            signaled = bool(
+                                row[0]
+                            )
+
+                            queue_name = row[1]
+
+                            if (
+                                signaled and
+                                queue_name
+                            ):
+                                event = (
+                                    self._events.get(
+                                        queue_name
+                                    )
+                                )
+
+                                if event is not None:
+                                    event.set()
+
+                except asyncio.CancelledError:
+                    raise
+
+                except Exception:
+                    #
+                    # Service Broker connection lost.
+                    #
+                    await asyncio.sleep(5)
+
+        finally:
+            pool.close()
+
+            await pool.wait_closed()
+
 class SqlServerDriver(DatabaseDriver):
     """
     SQL Server implementation of the SqlFlow DatabaseDriver using aioodbc.

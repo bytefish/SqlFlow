@@ -59,4 +59,6 @@ type WorkerOptions struct {
 	QueueName    string
 	PollInterval time.Duration
 	Concurrency  int
+    MaxTasksPerSecond int
+    RateLimitBurstSize int
 }

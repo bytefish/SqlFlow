@@ -22,10 +22,6 @@ async def _init_connection(conn):
         format="text"
     )
 
-
-import asyncio
-import asyncpg
-
 class PostgresQueueSignalListener(
     QueueSignalListener
 ):
