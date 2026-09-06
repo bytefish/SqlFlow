@@ -53,9 +53,6 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
             BatchSize = config.BatchSize,
             ClaimTimeout = config.ClaimTimeoutInSeconds,
             FatalOnLeaseTimeout = config.FatalOnLeaseTimeout,
-            PollInterval = config.PollIntervalInSeconds,
-            MaxTasksPerSecond = config.MaxTasksPerSecond,
-            RateLimitBurstSize = config.RateLimitBurstSize,
             OnError = config.OnError ??
                 (exception => _logger.LogError(
                     exception,

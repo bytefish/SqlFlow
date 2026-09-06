@@ -5,9 +5,10 @@ import java.util.function.Consumer;
 public record WorkerConfiguration(
     String queueName,
     int concurrency,
-    double pollIntervalInSeconds,
     int claimTimeoutInSeconds,
     Integer batchSize,
+    Integer maxTasksPerSecond,
+    Integer rateLimitBurstSize,
     boolean fatalOnLeaseTimeout,
     Consumer<Exception> onError
 ) {

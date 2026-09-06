@@ -2,7 +2,7 @@ package de.bytefish.sqlflow.core.infrastructure;
 
 import java.util.concurrent.locks.LockSupport;
 
-final class TokenBucketRateLimiter
+public final class TokenBucketRateLimiter
 {
     private final long permitsPerSecond;
 

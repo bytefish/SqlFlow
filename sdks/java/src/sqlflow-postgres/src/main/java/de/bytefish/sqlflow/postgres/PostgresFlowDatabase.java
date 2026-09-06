@@ -122,7 +122,7 @@ public class PostgresFlowDatabase implements SqlFlowDatabase {
     @Override
     public void persistCheckpoint(String queue, String taskId, String runId, String checkpointName, String stateJson, int timeout) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("CALL ssf.set_task_checkpoint_state(?, ?, ?, ?, ?, ?)")) {
+            try (PreparedStatement cmd = conn.prepareStatement("CALL ssf.set_task_checkpoint_state(?, ?, ?, ?::jsonb, ?, ?)")) {
                 cmd.setString(1, queue);
                 cmd.setObject(2, UUID.fromString(taskId));
                 cmd.setString(3, checkpointName);
@@ -159,7 +159,7 @@ public class PostgresFlowDatabase implements SqlFlowDatabase {
     @Override
     public void emitEvent(String queue, String eventName, String payloadJson) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("CALL ssf.emit_event(?, ?, ?)")) {
+            try (PreparedStatement cmd = conn.prepareStatement("CALL ssf.emit_event(?, ?, ?::jsonb)")) {
                 cmd.setString(1, queue);
                 cmd.setString(2, eventName);
                 cmd.setString(3, payloadJson);
@@ -184,7 +184,7 @@ public class PostgresFlowDatabase implements SqlFlowDatabase {
     @Override
     public void completeRun(String queue, String runId, String resultJson) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("CALL ssf.complete_run(?, ?, ?)")) {
+            try (PreparedStatement cmd = conn.prepareStatement("CALL ssf.complete_run(?, ?, ?::jsonb)")) {
                 cmd.setString(1, queue);
                 cmd.setObject(2, UUID.fromString(runId));
                 cmd.setString(3, resultJson);

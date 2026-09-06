@@ -1,4 +1,6 @@
 package de.bytefish.sqlflow.core.workers;
 
-public class SqlFlowDispatcher {
+public interface SqlFlowDispatcher
+{
+    void runWorker(WorkerOptions options);
 }

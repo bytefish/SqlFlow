@@ -4,8 +4,7 @@ import java.time.Duration;
 
 public interface QueueSignalListener
 {
-    void registerQueue(
-            String queueName);
+    void registerQueue(String queueName);
 
     boolean waitForSignal(
             String queueName,

@@ -1,9 +1,13 @@
 package de.bytefish.sqlflow.sqlserver;
 
+import de.bytefish.sqlflow.core.workers.DefaultSqlFlowDispatcher;
 import de.bytefish.sqlflow.core.workers.QueueSignalListener;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.sql.DataSource;
 
+import java.net.SocketException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -15,176 +19,180 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 
-public final class SqlServerQueueSignalListener implements QueueSignalListener, AutoCloseable
-{
+public final class SqlServerQueueSignalListener implements QueueSignalListener, AutoCloseable {
+    private static final Logger logger = LoggerFactory.getLogger(SqlServerQueueSignalListener.class);
+
     private final DataSource dataSource;
 
-    private final Map<String, Semaphore> queueSignals =
-            new ConcurrentHashMap<>();
+    private final Map<String, Semaphore> queueSignals = new ConcurrentHashMap<>();
 
     private volatile boolean running = true;
 
     private volatile Thread listenerThread;
 
-    public SqlServerQueueSignalListener(
-            DataSource dataSource)
-    {
+    public SqlServerQueueSignalListener(DataSource dataSource) {
         this.dataSource = dataSource;
-
+        signalAllQueues();
         startListener();
     }
 
     @Override
-    public void registerQueue(
-            String queueName)
-    {
-        queueSignals.computeIfAbsent(
-                queueName,
-                ignored -> new Semaphore(0));
+    public void registerQueue(String queueName) {
+        queueSignals.computeIfAbsent(queueName, ignored -> new Semaphore(0));
     }
 
     @Override
     public boolean waitForSignal(
             String queueName,
             Duration timeout)
-            throws InterruptedException
-    {
+            throws InterruptedException {
         Semaphore semaphore =
-                queueSignals.computeIfAbsent(
-                        queueName,
-                        ignored ->
-                                new Semaphore(0));
+                queueSignals.computeIfAbsent(queueName, ignored -> new Semaphore(0));
 
         return semaphore.tryAcquire(
                 timeout.toMillis(),
                 java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
-    private void startListener()
-    {
+    private void startListener() {
         listenerThread =
                 Thread.ofVirtual()
-                        .name(
-                                "sqlflow-service-broker-listener")
-                        .start(
-                                this::listenerLoop);
+                        .name("sqlflow-service-broker-listener")
+                        .start(this::listenerLoop);
     }
 
     private void listenerLoop()
     {
+        String waitSql = """
+        WAITFOR (
+            RECEIVE TOP(1)
+                CAST(message_body AS NVARCHAR(MAX))
+            FROM ssf.NotificationQueue
+        ), TIMEOUT 60000;
+        """;
+
         while (running)
         {
-            try (
-                    Connection connection =
-                            dataSource.getConnection())
+            try (Connection connection = dataSource.getConnection())
             {
+                PreparedStatement stmt = connection.prepareStatement(waitSql);
                 while (running)
                 {
-                    SignalMessage signal =
-                            waitForSignalMessage(
-                                    connection);
-
-                    if (signal == null)
+                    try (ResultSet rs = stmt.executeQuery())
                     {
-                        continue;
-                    }
+                        if (!rs.next())
+                        {
+                            continue;
+                        }
 
-                    Semaphore semaphore =
-                            queueSignals.get(
-                                    signal.queueName());
+                        String payload = rs.getString(1);
 
-                    if (semaphore != null)
-                    {
-                        semaphore.release();
+                        if (payload != null)
+                        {
+                            parseAndSignal(payload);
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
+                //
+                // Expected during shutdown.
+                //
+                if (!running)
+                {
+                    return;
+                }
+
+                Throwable root = ex;
+
+                while (root.getCause() != null)
+                {
+                    root = root.getCause();
+                }
+
+                if (root instanceof SocketException && "Closed by interrupt".equals(root.getMessage()))
+                {
+                    return;
+                }
+
+                logger.error(
+                        "Listener connection failed",
+                        ex);
+
                 try
                 {
-                    Thread.sleep(5000);
+                    Thread.sleep(2000);
                 }
                 catch (InterruptedException ignored)
                 {
-                    Thread.currentThread()
-                            .interrupt();
-
+                    Thread.currentThread().interrupt();
                     return;
                 }
             }
         }
     }
 
-    private SignalMessage waitForSignalMessage(
-            Connection connection)
-            throws Exception
+    private void parseAndSignal(String jsonPayload)
     {
-        try (
-                PreparedStatement stmt =
-                        connection.prepareStatement(
-                                """
-                                EXEC ssf.wait_for_queue_signal
-                                    @p_timeout_ms = ?
-                                """))
+        try
         {
-            stmt.setInt(
-                    1,
-                    60000);
+            int queueIdx = jsonPayload.indexOf("\"queue\":");
 
-            try (
-                    ResultSet rs =
-                            stmt.executeQuery())
+            if (queueIdx >= 0)
             {
-                if (!rs.next())
+                int start = jsonPayload.indexOf('"', queueIdx + 8);
+
+                if (start >= 0)
                 {
-                    return null;
+                    int end = jsonPayload.indexOf('"', start + 1);
+
+                    if (end > start)
+                    {
+                        String queueName = jsonPayload.substring(start + 1, end);
+
+                        signalQueue(queueName);
+
+                        return;
+                    }
                 }
-
-                boolean signaled =
-                        rs.getBoolean(
-                                "signaled");
-
-                if (!signaled)
-                {
-                    return null;
-                }
-
-                String queue =
-                        rs.getString(
-                                "queue_name");
-
-                if (queue == null ||
-                        queue.isBlank())
-                {
-                    return null;
-                }
-
-                return new SignalMessage(
-                        true,
-                        queue);
             }
         }
+        catch (Exception ignored)
+        {
+        }
+
+        signalAllQueues();
     }
 
-    @Override
-    public void close()
-            throws Exception
+    private void signalQueue(
+            String queueName)
     {
-        running = false;
+        Semaphore semaphore = queueSignals.get(queueName);
 
-        if (listenerThread != null)
+        if (semaphore != null)
         {
-            listenerThread.interrupt();
-
-            listenerThread.join(
-                    10_000);
+            semaphore.release();
         }
     }
 
-    private record SignalMessage(
-            boolean signaled,
-            String queueName)
+    private void signalAllQueues()
     {
+        for (Semaphore semaphore : queueSignals.values())
+        {
+            semaphore.release();
+        }
+    }
+
+
+    @Override
+    public void close() throws Exception {
+        running = false;
+
+        if (listenerThread != null) {
+            listenerThread.interrupt();
+
+            listenerThread.join(10_000);
+        }
     }
 }

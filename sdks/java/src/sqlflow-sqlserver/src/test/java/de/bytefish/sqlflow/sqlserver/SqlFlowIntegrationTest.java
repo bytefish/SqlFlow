@@ -6,10 +6,12 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import de.bytefish.sqlflow.core.ISqlFlow;
 import de.bytefish.sqlflow.core.SqlFlow;
+import de.bytefish.sqlflow.core.infrastructure.QueueSignalOptions;
 import de.bytefish.sqlflow.core.models.*;
-import de.bytefish.sqlflow.core.workers.SqlFlowWorker;
+import de.bytefish.sqlflow.core.workers.DefaultSqlFlowDispatcher;
+import de.bytefish.sqlflow.core.workers.SqlFlowDispatcher;
+import de.bytefish.sqlflow.core.workers.WorkerInstance;
 import de.bytefish.sqlflow.core.workers.WorkerOptions;
-import de.bytefish.sqlflow.sqlserver.SqlServerFlowDatabase;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
@@ -34,10 +36,14 @@ import static org.junit.jupiter.api.Assertions.*;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class SqlFlowIntegrationTest {
 
+    private SqlServerQueueSignalListener signals;
+
+    private SqlFlowDispatcher dispatcher;
+
     @Container
-    static MSSQLServerContainer sqlServer =(MSSQLServerContainer) new MSSQLServerContainer(
-"mcr.microsoft.com/mssql/server:2022-latest"
-            ).acceptLicense()
+    static MSSQLServerContainer sqlServer = (MSSQLServerContainer) new MSSQLServerContainer(
+            "mcr.microsoft.com/mssql/server:2022-latest"
+    ).acceptLicense()
             .withPassword("SuperStrongPasswort@!")
             .waitingFor(
                     Wait.forLogMessage(
@@ -56,9 +62,14 @@ public class SqlFlowIntegrationTest {
     private static final String WORKER_ID = "test-worker-1";
 
     // --- Dummy Models ---
-    public record MathParams(int a, int b) {}
-    public record OrderParams(String orderId) {}
-    public record PaymentEvent(boolean success, String ref) {}
+    public record MathParams(int a, int b) {
+    }
+
+    public record OrderParams(String orderId) {
+    }
+
+    public record PaymentEvent(boolean success, String ref) {
+    }
 
     @BeforeAll
     static void setupBeforeAll() throws Exception {
@@ -76,16 +87,16 @@ public class SqlFlowIntegrationTest {
                 "/bin/bash",
                 "-c",
                 """
-                SQLCMD=$(find /opt/mssql-tools*/bin/sqlcmd -type f -print -quit)
-        
-                "$SQLCMD" \
-                  -S localhost \
-                  -U "$1" \
-                  -P "$2" \
-                  -C \
-                  -b \
-                  -i /tmp/ssf-sqlserver.sql
-                """,
+                        SQLCMD=$(find /opt/mssql-tools*/bin/sqlcmd -type f -print -quit)
+                        
+                        "$SQLCMD" \
+                          -S localhost \
+                          -U "$1" \
+                          -P "$2" \
+                          -C \
+                          -b \
+                          -i /tmp/ssf-sqlserver.sql
+                        """,
                 "sql-init",
                 sqlServer.getUsername(),
                 sqlServer.getPassword()
@@ -105,7 +116,7 @@ public class SqlFlowIntegrationTest {
         HikariConfig config = new HikariConfig();
 
         config.setDriverClassName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
-        config.setJdbcUrl(sqlServer.getJdbcUrl() + ";encrypt=false;trustServerCertificate=true");
+        config.setJdbcUrl(sqlServer.getJdbcUrl() + ";databaseName=SqlFlow;encrypt=false;trustServerCertificate=true");
         config.setUsername(sqlServer.getUsername());
         config.setPassword(sqlServer.getPassword());
         config.setMaximumPoolSize(5);
@@ -121,8 +132,39 @@ public class SqlFlowIntegrationTest {
     @BeforeEach
     void setup() {
         db = new SqlServerFlowDatabase(dataSource, mapper);
+
         sqlFlow = new SqlFlow(db, mapper);
+
         sqlFlow.createQueue(QUEUE);
+
+        signals = new SqlServerQueueSignalListener(dataSource);
+
+        dispatcher = new DefaultSqlFlowDispatcher(sqlFlow, signals, new QueueSignalOptions(Duration.ofSeconds(30)));
+    }
+
+    @AfterEach
+    void cleanup() throws Exception {
+        if (signals != null) {
+            signals.close();
+        }
+    }
+
+    private WorkerInstance createWorker()
+    {
+        WorkerInstance worker =
+                new WorkerInstance(
+                        WorkerOptions.builder()
+                                .workerId(WORKER_ID)
+                                .queue(QUEUE)
+                                .claimTimeout(120)
+                                .batchSize(1)
+                                .concurrency(1)
+                                .build(),
+                        dispatcher);
+
+        worker.start();
+
+        return worker;
     }
 
     @Test
@@ -146,22 +188,25 @@ public class SqlFlowIntegrationTest {
         SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
         sqlFlow.spawn(options, "add-numbers", new MathParams(10, 20));
 
-        SqlFlowWorker worker = new SqlFlowWorker(WorkerOptions.builder()
-                .workerId(WORKER_ID)
-                .queue(QUEUE)
-                .pollInterval(0.1) // Fast polling for tests
-                .concurrency(1)
-                .build(), sqlFlow);
+        WorkerInstance worker =
+                createWorker();
 
-        Thread workerThread = Thread.ofVirtual().start(worker);
+        try
+        {
+            Integer result =
+                    completionSource.get(
+                            5,
+                            TimeUnit.SECONDS);
 
-        // Wait for task completion (or timeout)
-        Integer result = completionSource.get(5, TimeUnit.SECONDS);
-        worker.close();
-        workerThread.join();
-
-        // ASSERT
-        assertEquals(30, result, "The worker should have summed 10 + 20 to get 30.");
+            assertEquals(
+                    30,
+                    result,
+                    "The worker should have summed 10 + 20 to get 30.");
+        }
+        finally
+        {
+            worker.close();
+        }
     }
 
     @Test
@@ -186,14 +231,7 @@ public class SqlFlowIntegrationTest {
         SpawnResult spawnResult = sqlFlow.spawn(options, "checkpoint-task", new OrderParams("ORD-123"));
 
         // ACT: Run worker until it processes the task (which will crash once, then retry)
-        SqlFlowWorker worker = new SqlFlowWorker(WorkerOptions.builder()
-                .workerId(WORKER_ID)
-                .queue(QUEUE)
-                .pollInterval(0.2)
-                .concurrency(1)
-                .build(), sqlFlow);
-
-        Thread workerThread = Thread.ofVirtual().start(worker);
+        WorkerInstance worker = createWorker();
 
         // Wait until task reaches 'completed' state in DB (polling DB state)
         boolean isCompleted = false;
@@ -206,7 +244,6 @@ public class SqlFlowIntegrationTest {
         }
 
         worker.close();
-        workerThread.join();
 
         // ASSERT
         assertTrue(isCompleted, "Task should ultimately complete successfully.");
@@ -239,14 +276,7 @@ public class SqlFlowIntegrationTest {
 
         SpawnResult spawnResult = sqlFlow.spawn(options, "event-task", new OrderParams("999"));
 
-        SqlFlowWorker worker = new SqlFlowWorker(WorkerOptions.builder()
-                .workerId(WORKER_ID)
-                .queue(QUEUE)
-                .pollInterval(0.2)
-                .concurrency(1)
-                .build(), sqlFlow);
-
-        Thread workerThread = Thread.ofVirtual().start(worker);
+        WorkerInstance worker = createWorker();
 
         // Wait for the task to be suspended (state = 'sleeping' inside ssf.runs due to await_event logic)
         for (int i = 0; i < 10; i++) {
@@ -264,12 +294,24 @@ public class SqlFlowIntegrationTest {
         // Wait for completion signaled by the CompletableFuture inside the lambda
         String ref = paymentRef.get(5, TimeUnit.SECONDS);
 
-        worker.close();
-        workerThread.join();
+        boolean completed = false;
 
-        // ASSERT
+        for (int i = 0; i < 20; i++)
+        {
+            if ("completed".equals(getTaskState(spawnResult.taskId())))
+            {
+                completed = true;
+
+                break;
+            }
+
+            Thread.sleep(250);
+        }
+
         assertEquals("TX-12345", ref);
-        assertEquals("completed", getTaskState(spawnResult.taskId()));
+        assertTrue(completed, "Task should eventually complete.");
+
+        worker.close();
     }
 
     @Test
