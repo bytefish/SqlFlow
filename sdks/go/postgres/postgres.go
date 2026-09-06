@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+    "sync"
 	"time"
 
 	"github.com/bytefish/SqlFlow/sdks/go"
@@ -12,6 +13,7 @@ import (
 
 type PostgresDriver struct {
 	pool *pgxpool.Pool
+    connString string
 }
 
 func NewPostgresDriver(ctx context.Context, connString string) (*PostgresDriver, error) {
@@ -19,7 +21,7 @@ func NewPostgresDriver(ctx context.Context, connString string) (*PostgresDriver,
 	if err != nil {
 		return nil, err
 	}
-	return &PostgresDriver{pool: pool}, nil
+	return &PostgresDriver{pool: pool, connString: connString,}, nil
 }
 
 func (p *PostgresDriver) Close() {
@@ -43,6 +45,24 @@ func (p *PostgresDriver) SpawnTask(ctx context.Context, queueName string, taskNa
 		return nil, err
 	}
 	return &res, nil
+}
+
+func (p *PostgresDriver) CreateQueueSignalListener(
+    ctx context.Context,
+) (sqlflow.QueueSignalListener, error) {
+
+    listener :=
+        NewPostgresQueueSignalListener(
+            p.connString,
+        )
+
+    err := listener.Start(ctx)
+
+    if err != nil {
+        return nil, err
+    }
+
+    return listener, nil
 }
 
 func (p *PostgresDriver) ClaimTask(ctx context.Context, queueName string, workerID string, claimTimeout int, qty int) ([]sqlflow.ClaimedTask, error) {
@@ -127,3 +147,158 @@ func (p *PostgresDriver) CancelTask(ctx context.Context, queueName string, taskI
 	_, err := p.pool.Exec(ctx, "CALL ssf.cancel_task($1, $2)", queueName, taskID)
 	return err
 }
+
+
+type PostgresQueueSignalListener struct {
+	connString string
+
+	mu sync.RWMutex
+
+	signals map[string]chan bool
+}
+
+func NewPostgresQueueSignalListener(
+	connString string,
+) *PostgresQueueSignalListener {
+
+	return &PostgresQueueSignalListener{
+		connString: connString,
+		signals:    make(map[string]chan bool),
+	}
+}
+
+func (p *PostgresQueueSignalListener) RegisterQueue(
+    ctx context.Context,
+    queueName string,
+) error {
+
+    p.mu.Lock()
+    defer p.mu.Unlock()
+
+    if _, ok := p.signals[queueName]; ok {
+        return nil
+    }
+
+    ch :=
+        make(
+            chan bool,
+            1,
+        )
+
+    //
+    // Initial reconciliation.
+    //
+    ch <- true
+
+    p.signals[queueName] =
+        ch
+
+    return nil
+}
+
+func (p *PostgresQueueSignalListener) WaitForSignal(
+    ctx context.Context,
+    queueName string,
+    timeout time.Duration,
+) (bool, error) {
+
+    p.mu.RLock()
+
+    ch :=
+        p.signals[queueName]
+
+    p.mu.RUnlock()
+
+    select {
+
+    case <-ch:
+        return true, nil
+
+    case <-time.After(timeout):
+        return false, nil
+
+    case <-ctx.Done():
+        return false, ctx.Err()
+    }
+}
+
+func (p *PostgresQueueSignalListener) Start(
+    ctx context.Context,
+) error {
+
+    conn, err :=
+        pgx.Connect(
+            ctx,
+            p.connString,
+        )
+
+    if err != nil {
+        return err
+    }
+
+    _, err =
+        conn.Exec(
+            ctx,
+            "LISTEN ssf_work_available",
+        )
+
+    if err != nil {
+        return err
+    }
+
+    go func() {
+
+        defer conn.Close(
+            context.Background(),
+        )
+
+        for {
+
+            notification, err :=
+                conn.WaitForNotification(
+                    ctx,
+                )
+
+            if err != nil {
+
+                if ctx.Err() != nil {
+                    return
+                }
+
+                continue
+            }
+
+            queueName :=
+                notification.Payload
+
+            p.signalQueue(
+                queueName,
+            )
+        }
+    }()
+
+    return nil
+}
+
+func (p *PostgresQueueSignalListener) signalQueue(queueName string) {
+
+	p.mu.RLock()
+
+	ch, exists :=
+		p.signals[queueName]
+
+	p.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	select {
+
+	case ch <- true:
+
+	default:
+	}
+}
+
+var _ sqlflow.QueueSignalListener =	(*PostgresQueueSignalListener)(nil)

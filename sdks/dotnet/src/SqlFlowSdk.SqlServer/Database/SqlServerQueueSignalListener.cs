@@ -233,18 +233,14 @@ public sealed class SqlServerQueueSignalListener :
         }
     }
 
-    private async Task DelayBeforeReconnectAsync(
-        CancellationToken cancellationToken)
+    private async Task DelayBeforeReconnectAsync(CancellationToken cancellationToken)
     {
         try
         {
-            await Task.Delay(
-                    _options.ReconnectDelay,
-                    cancellationToken)
+            await Task.Delay(_options.ReconnectDelay, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-            when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Normal shutdown.
         }

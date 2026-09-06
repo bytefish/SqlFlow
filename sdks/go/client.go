@@ -70,8 +70,18 @@ func (c *Client) RegisterTask(taskName string, handler Handler) {
 	c.registry[taskName] = handler
 }
 
-func (c *Client) CreateWorker(opts WorkerOptions) *Worker {
-	return NewWorker(opts, c.db, c.registry)
+func (c *Client) CreateWorker(
+    ctx context.Context,
+    opts WorkerOptions,
+) (*Worker, error) {
+
+    signals, err := c.db.CreateQueueSignalListener(ctx)
+
+    if err != nil {
+        return nil, err
+    }
+
+    return NewWorker(opts, c.db, c.registry, signals), nil
 }
 
 func RegisterWorkflow[T any](c *Client, taskName string, workflow func(ctx *TaskContext, params T) error) {

@@ -17,4 +17,5 @@ type Driver interface {
 	AwaitEvent(ctx context.Context, queueName string, taskID string, runID string, stepName string, eventName string, timeout *int) (*AwaitEventResult, error)
 	EmitEvent(ctx context.Context, queueName string, eventName string, payload string) error
 	CancelTask(ctx context.Context, queueName string, taskID string) error
+    CreateQueueSignalListener(ctx context.Context) (QueueSignalListener, error)
 }
