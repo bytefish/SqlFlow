@@ -9,7 +9,7 @@ try:
 except ImportError:
     raise ImportError("The 'aioodbc' package is required for SQL Server support. Install with: pip install sqlflow-sdk[sqlserver]")
 
-from sqlflow.sdk import DatabaseDriver, SpawnResult
+from sqlflow.sdk import DatabaseDriver, SpawnResult, QueueSignalListener
 
 logger = logging.getLogger("sqlflow.sqlserver")
 
@@ -17,9 +17,7 @@ import asyncio
 from typing import Dict
 import aioodbc
 
-class SqlServerQueueSignalListener(
-    QueueSignalListener
-):
+class SqlServerQueueSignalListener(QueueSignalListener):
     def __init__(
         self,
         connection_string: str
@@ -50,6 +48,7 @@ class SqlServerQueueSignalListener(
         )
 
     async def stop(self) -> None:
+
         self._running = False
 
         if self._listener_task:
@@ -60,16 +59,24 @@ class SqlServerQueueSignalListener(
             except asyncio.CancelledError:
                 pass
 
+            self._listener_task = None
+
     async def register_queue(
         self,
         queue_name: str
     ) -> None:
+
         if queue_name in self._events:
             return
 
-        self._events[
-            queue_name
-        ] = asyncio.Event()
+        event = asyncio.Event()
+
+        #
+        # Initial reconciliation.
+        #
+        event.set()
+
+        self._events[queue_name] = event
 
     async def wait_for_signal(
         self,
@@ -160,7 +167,8 @@ class SqlServerDriver(DatabaseDriver):
         """
         self.dsn = dsn
         self._pool: Optional[aioodbc.Pool] = None
-
+        self._listener: Optional[SqlServerQueueSignalListener] = None
+        
     async def connect(self) -> None:
         """Initializes the async ODBC connection pool."""
         if not self._pool:
@@ -168,12 +176,19 @@ class SqlServerDriver(DatabaseDriver):
             logger.info("SQL Server connection pool created.")
 
     async def disconnect(self) -> None:
-        """Closes the connection pool."""
+
+        if self._listener:
+            await self._listener.stop()
+            self._listener = None
+
         if self._pool:
             self._pool.close()
             await self._pool.wait_closed()
             self._pool = None
-            logger.info("SQL Server connection pool closed.")
+
+        logger.info(
+            "SQL Server connection pool closed."
+        )
 
     def _ensure_pool(self) -> aioodbc.Pool:
         if not self._pool:
@@ -313,3 +328,18 @@ class SqlServerDriver(DatabaseDriver):
                     "{CALL ssf.cancel_task (?, ?)}",
                     (p_queue_name, str(p_task_id))
                 )
+                
+    async def create_queue_signal_listener(self) -> QueueSignalListener:
+
+        if self._listener is not None:
+            return self._listener
+
+        listener = SqlServerQueueSignalListener(
+            self.dsn
+        )
+
+        await listener.start()
+
+        self._listener = listener
+
+        return listener

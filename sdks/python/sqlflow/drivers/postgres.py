@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -9,7 +10,7 @@ try:
 except ImportError:
     raise ImportError("The 'asyncpg' package is required for PostgreSQL support. Install with: pip install sqlflow-sdk[postgres]")
 
-from sqlflow.sdk import DatabaseDriver, SpawnResult
+from sqlflow.sdk import DatabaseDriver, SpawnResult, QueueSignalListener
 
 logger = logging.getLogger("sqlflow.postgres")
 
@@ -22,9 +23,7 @@ async def _init_connection(conn):
         format="text"
     )
 
-class PostgresQueueSignalListener(
-    QueueSignalListener
-):
+class PostgresQueueSignalListener(QueueSignalListener):
     def __init__(self, connection_string: str):
         self._connection_string = (
             connection_string
@@ -45,25 +44,46 @@ class PostgresQueueSignalListener(
         self,
         queue_name: str
     ) -> None:
+
         if queue_name in self._queues:
             return
 
         event = asyncio.Event()
 
+        #
+        # Initial reconciliation.
+        #
+        event.set()
+
         self._queues[queue_name] = event
 
-        async def callback(
-            connection,
-            pid,
-            channel,
-            payload
-        ):
-            event.set()
+    async def start(self):
+
+        self._connection = (
+            await asyncpg.connect(
+                self._connection_string
+            )
+        )
 
         await self._connection.add_listener(
-            f"ssf_{queue_name}",
-            callback
+            "ssf_work_available",
+            self._on_notification
         )
+
+    async def _on_notification(
+        self,
+        connection,
+        pid,
+        channel,
+        payload
+    ):
+
+        event = (
+            self._queues.get(payload)
+        )
+
+        if event:
+            event.set()
 
     async def wait_for_signal(
         self,
@@ -97,6 +117,7 @@ class PostgresDriver(DatabaseDriver):
         :param dsn: The connection string (e.g., postgresql://user:pass@localhost:5432/mydb)
         """
         self.dsn = dsn
+        self._listener = None
         self._pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
@@ -213,3 +234,17 @@ class PostgresDriver(DatabaseDriver):
             p_queue_name, p_task_id
         )
             
+    async def create_queue_signal_listener(self) -> QueueSignalListener:
+
+        if self._listener is not None:
+            return self._listener
+
+        listener = PostgresQueueSignalListener(
+            self.dsn
+        )
+
+        await listener.start()
+
+        self._listener = listener
+
+        return listener

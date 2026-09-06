@@ -54,6 +54,25 @@ class WorkerOptions(BaseModel):
     queue_name: str
     poll_interval: float
     concurrency: int
+    max_tasks_per_second: Optional[int] = None
+    rate_limit_burst_size: Optional[int] = None
+
+class QueueSignalListener(ABC):
+
+    @abstractmethod
+    async def register_queue(
+        self,
+        queue_name: str
+    ) -> None:
+        pass
+
+    @abstractmethod
+    async def wait_for_signal(
+        self,
+        queue_name: str,
+        timeout_seconds: float
+    ) -> bool:
+        pass
 
 class DatabaseDriver(ABC):
     """
@@ -116,22 +135,9 @@ class DatabaseDriver(ABC):
     async def cancel_task(self, p_queue_name: str, p_task_id: UUID) -> None:
         """CALL ssf.cancel_task(p_queue_name TEXT, p_task_id UUID)"""
         pass
-
-class QueueSignalListener(ABC):
-
+        
     @abstractmethod
-    async def register_queue(
-        self,
-        queue_name: str
-    ) -> None:
-        pass
-
-    @abstractmethod
-    async def wait_for_signal(
-        self,
-        queue_name: str,
-        timeout_seconds: float
-    ) -> bool:
+    def create_queue_signal_listener(self) -> QueueSignalListener:
         pass
 
 
@@ -507,7 +513,7 @@ class SqlFlow:
     """
     def __init__(self, db: DatabaseDriver):
         self._db = db
-        # Internal registry mapping task names to (handler, max_attempts)
+        self._listener = None
         self._registry: Dict[str, Tuple[Callable[[TaskContext, Any], Any], int]] = {}
 
     async def create_queue(self, queue_name: str, storage_mode: str = 'unpartitioned') -> None:
@@ -549,13 +555,13 @@ class SqlFlow:
         """
         self._registry[task_name] = (handler, max_attempts)
 
-    def create_worker(self, options: WorkerOptions) -> Worker:
-        """
-        Creates a background worker for a specific queue utilizing the tasks 
-        registered in this client instance.
-        """
+    async def create_worker(self, options: WorkerOptions) -> Worker:
+        if self._listener is  None:
+            self._listener = (await self._db.create_queue_signal_listener())
+
         return Worker(
             options=options,
             db=self._db,
-            registry=self._registry
+            registry=self._registry,
+            signals=self._listener
         )

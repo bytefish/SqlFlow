@@ -204,12 +204,14 @@ async def lifespan(app: FastAPI):
     sqlflow_client.register_task("solve-bug", autonomous_agent_workflow, max_attempts=3)
     
     # Start Worker
-    worker = sqlflow_client.create_worker(WorkerOptions(
-        worker_id="agent-worker-1",
-        queue_name="ai-agent-queue",
-        poll_interval=1.0,
-        concurrency=1
-    ))
+    worker = await sqlflow_client.create_worker(
+        WorkerOptions(
+            worker_id="agent-worker-1",
+            queue_name="ai-agent-queue",
+            poll_interval=1.0,
+            concurrency=1
+        )
+    )
     
     await worker.start()
     
