@@ -50,7 +50,19 @@ public class WorkerConfiguration
     /// non-recoverable error and may terminate the operation or process. When set to <see langword="false"/>, lease
     /// timeouts are handled as recoverable events, allowing for retry or recovery logic.</remarks>
     public bool FatalOnLeaseTimeout { get; set; } = true;
-    
+
+    /// <summary>
+    /// Optional rate limit for the number of tasks that can be processed per second. If specified, 
+    /// the worker will ensure that it does not exceed this rate when executing tasks.
+    /// </summary>
+    public int? MaxTasksPerSecond { get; set; }
+
+    /// <summary>
+    /// Rate limit burst size for the number of tasks that can be processed in a short burst. If specified,
+    /// the worker will allow a temporary increase in the processing rate up to this limit.
+    /// </summary>
+    public int? RateLimitBurstSize { get; set; }
+
     /// <summary>
     /// Gets or sets the callback to invoke when an unhandled exception occurs.
     /// </summary>

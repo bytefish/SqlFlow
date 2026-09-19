@@ -199,14 +199,20 @@ func main() {
 
 	sqlflow.RegisterWorkflow(sqlflowClient, "solve-bug", autonomousAgentWorkflow)
 
-	workerOpts := sqlflow.WorkerOptions{
-		WorkerID:     "agent-worker-1",
-		QueueName:    "ai-agent-queue",
-		PollInterval: 1 * time.Second,
-		Concurrency:  5,
-	}
-	
-	worker := sqlflowClient.CreateWorker(workerOpts)
+    worker, err := sqlflowClient.CreateWorker(
+        ctx,
+        sqlflow.WorkerOptions{
+            QueueName: "ai-agent-queue",
+            WorkerID:  "worker-1",
+            Concurrency: 5,
+            BatchSize:   5,
+        },
+    )
+
+    if err != nil {
+        panic(err)
+    }
+    
 	worker.Start(ctx)
 	
 	log.Println("Background worker started.")

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,25 @@ class WorkerOptions(BaseModel):
     queue_name: str
     poll_interval: float
     concurrency: int
+    max_tasks_per_second: Optional[int] = None
+    rate_limit_burst_size: Optional[int] = None
+
+class QueueSignalListener(ABC):
+
+    @abstractmethod
+    async def register_queue(
+        self,
+        queue_name: str
+    ) -> None:
+        pass
+
+    @abstractmethod
+    async def wait_for_signal(
+        self,
+        queue_name: str,
+        timeout_seconds: float
+    ) -> bool:
+        pass
 
 class DatabaseDriver(ABC):
     """
@@ -116,6 +136,77 @@ class DatabaseDriver(ABC):
     async def cancel_task(self, p_queue_name: str, p_task_id: UUID) -> None:
         """CALL ssf.cancel_task(p_queue_name TEXT, p_task_id UUID)"""
         pass
+        
+    @abstractmethod
+    async def get_next_available_at(self, p_queue_name: str) -> Optional[datetime]:
+        """SELECT ssf.get_next_available_at(p_queue_name TEXT)"""
+        pass
+
+    @abstractmethod
+    def create_queue_signal_listener(self) -> QueueSignalListener:
+        pass
+
+
+class AsyncTokenBucket:
+    def __init__(
+        self,
+        permits_per_second: int,
+        burst_size: int
+    ):
+        self._permits_per_second = (
+            permits_per_second
+        )
+
+        self._burst_size = burst_size
+
+        self._tokens = burst_size
+
+        self._last_refill = (
+            time.monotonic()
+        )
+
+        self._lock = asyncio.Lock()
+
+    async def acquire(
+        self,
+        permits: int
+    ) -> None:
+        while True:
+            async with self._lock:
+                self._refill()
+
+                if self._tokens >= permits:
+                    self._tokens -= permits
+                    return
+
+                missing = (
+                    permits -
+                    self._tokens
+                )
+
+            delay = (
+                missing /
+                self._permits_per_second
+            )
+
+            await asyncio.sleep(delay)
+
+    def _refill(self):
+        now = time.monotonic()
+
+        elapsed = (
+            now -
+            self._last_refill
+        )
+
+        self._last_refill = now
+
+        self._tokens = min(
+            self._burst_size,
+            self._tokens +
+            elapsed *
+            self._permits_per_second
+        )
 
 class TaskContext:
     """
@@ -189,15 +280,36 @@ class Worker:
         self, 
         options: WorkerOptions, 
         db: DatabaseDriver, 
-        registry: Dict[str, Tuple[Callable[[TaskContext, Any], Any], int]]
+        registry: Dict[str, Tuple[Callable[[TaskContext, Any], Any], int]],
+        signals: QueueSignalListener
     ):
         self._options = options
         self._db = db
         self._registry = registry
         self._is_running = False
         self._worker_task: Optional[asyncio.Task] = None
-        # Semaphore limits how many tasks this worker processes concurrently
+        self._signals = signals
         self._semaphore = asyncio.Semaphore(options.concurrency)
+        self._rate_limiter = None
+
+        if (
+            options.max_tasks_per_second and
+            options.max_tasks_per_second > 0
+        ):
+            burst = (
+                options.rate_limit_burst_size
+                or
+                options.max_tasks_per_second
+            )
+
+            self._rate_limiter = (
+                AsyncTokenBucket(
+                    permits_per_second=
+                        options.max_tasks_per_second,
+
+                    burst_size=burst
+                )
+            )
 
     async def start(self) -> None:
         """Starts the worker polling loop."""
@@ -205,6 +317,7 @@ class Worker:
             return
         self._is_running = True
         self._worker_task = asyncio.create_task(self._poll_loop())
+        await self._signals.register_queue(self._options.queue_name)
         logger.info(f"Worker {self._options.worker_id} started on queue '{self._options.queue_name}'.")
 
     async def stop(self) -> None:
@@ -219,36 +332,138 @@ class Worker:
         logger.info(f"Worker {self._options.worker_id} stopped.")
 
     async def _poll_loop(self) -> None:
-        """Continuous loop polling for tasks based on poll_interval."""
+        """
+        Main worker loop.
+
+        Instead of polling on a fixed interval, the worker waits for a
+        queue wake-up signal. A smart polling reconciliation timeout ensures
+        we wake up exactly when the next scheduled task is due.
+
+        Rate limiting is applied before claiming tasks so that tasks are
+        not unnecessarily held by claim leases.
+        """
+
+        reconciliation_timeout = 60.0
+
+        queue_may_contain_work = True
+
         while self._is_running:
             try:
-                # Wait until we have capacity in our concurrency semaphore
-                await self._semaphore.acquire()
-                self._semaphore.release()
+                #
+                # If the previous claim returned no work, wait for either
+                # the notification signal, the exact time the next task
+                # is scheduled, or the default fallback interval.
+                #
+                if not queue_may_contain_work:
+                    delay = reconciliation_timeout
+                    skip_wait = False
 
-                # Calculate how many tasks we have capacity to claim right now
-                available_capacity = self._options.concurrency
-                
+                    try:
+                        next_available_at = await self._db.get_next_available_at(
+                            p_queue_name=self._options.queue_name
+                        )
+
+                        if next_available_at is not None:
+                            if next_available_at.tzinfo is None:
+                                next_available_at = next_available_at.replace(tzinfo=timezone.utc)
+                                
+                            time_until_next_job = (next_available_at - datetime.now(timezone.utc)).total_seconds()
+
+                            if time_until_next_job <= 0:
+                                skip_wait = True
+                            elif time_until_next_job < delay:
+                                delay = time_until_next_job
+
+                    except Exception as ex:
+                        logger.warning(
+                            "Failed to retrieve next available time for queue '%s'. Falling back to default reconciliation interval.",
+                            self._options.queue_name,
+                            exc_info=ex
+                        )
+
+                    if not skip_wait and delay > 0:
+                        await self._signals.wait_for_signal(
+                            self._options.queue_name,
+                            delay
+                        )
+
+                    queue_may_contain_work = True
+
+                #
+                # Determine available execution capacity.
+                #
+                available_capacity = self._semaphore._value
+
+                if available_capacity <= 0:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                #
+                # Batch size is never larger than currently available
+                # execution capacity.
+                #
+                batch_size = min(
+                    available_capacity,
+                    self._options.concurrency
+                )
+
+                #
+                # Apply rate limiting BEFORE claiming tasks.
+                #
+                if (
+                    self._rate_limiter is not None and
+                    batch_size > 0
+                ):
+                    await self._rate_limiter.acquire(
+                        batch_size
+                    )
+
+                #
+                # Claim work from the queue.
+                #
                 claimed_tasks = await self._db.claim_task(
                     p_queue_name=self._options.queue_name,
                     p_worker_id=self._options.worker_id,
-                    p_claim_timeout=300,  # 5 minutes claim lock (configurable as needed)
-                    p_qty=available_capacity
+                    p_claim_timeout=300,
+                    p_qty=batch_size
                 )
 
+                #
+                # No tasks found.
+                #
                 if not claimed_tasks:
-                    await asyncio.sleep(self._options.poll_interval)
+                    queue_may_contain_work = False
                     continue
 
+                #
+                # Schedule execution.
+                #
                 for task_row in claimed_tasks:
-                    # Fire and forget the task execution so we can continue polling
-                    asyncio.create_task(self._process_task_with_semaphore(task_row))
+                    asyncio.create_task(
+                        self._process_task_with_semaphore(
+                            task_row
+                        )
+                    )
+
+                #
+                # Full batch probably means more work is still available.
+                #
+                queue_may_contain_work = (
+                    len(claimed_tasks) == batch_size
+                )
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Error in poll loop: {e}")
-                await asyncio.sleep(self._options.poll_interval)
+
+            except Exception as exception:
+                logger.exception(
+                    "Worker loop failed: %s",
+                    exception
+                )
+
+                queue_may_contain_work = False
+
+                await asyncio.sleep(1)
 
     async def _process_task_with_semaphore(self, task_row: Dict[str, Any]) -> None:
         """Wraps task processing with the concurrency semaphore."""
@@ -330,7 +545,7 @@ class SqlFlow:
     """
     def __init__(self, db: DatabaseDriver):
         self._db = db
-        # Internal registry mapping task names to (handler, max_attempts)
+        self._listener = None
         self._registry: Dict[str, Tuple[Callable[[TaskContext, Any], Any], int]] = {}
 
     async def create_queue(self, queue_name: str, storage_mode: str = 'unpartitioned') -> None:
@@ -372,13 +587,13 @@ class SqlFlow:
         """
         self._registry[task_name] = (handler, max_attempts)
 
-    def create_worker(self, options: WorkerOptions) -> Worker:
-        """
-        Creates a background worker for a specific queue utilizing the tasks 
-        registered in this client instance.
-        """
+    async def create_worker(self, options: WorkerOptions) -> Worker:
+        if self._listener is  None:
+            self._listener = (await self._db.create_queue_signal_listener())
+
         return Worker(
             options=options,
             db=self._db,
-            registry=self._registry
+            registry=self._registry,
+            signals=self._listener
         )

@@ -6,8 +6,11 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import de.bytefish.sqlflow.core.ISqlFlow;
 import de.bytefish.sqlflow.core.SqlFlow;
+import de.bytefish.sqlflow.core.infrastructure.QueueSignalOptions;
 import de.bytefish.sqlflow.core.models.*;
-import de.bytefish.sqlflow.core.workers.SqlFlowWorker;
+import de.bytefish.sqlflow.core.workers.DefaultSqlFlowDispatcher;
+import de.bytefish.sqlflow.core.workers.SqlFlowDispatcher;
+import de.bytefish.sqlflow.core.workers.WorkerInstance;
 import de.bytefish.sqlflow.core.workers.WorkerOptions;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -18,7 +21,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -31,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class SqlFlowIntegrationTest {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine")
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine")
             .withInitScript("ssf-postgres.sql");
 
     private static HikariDataSource dataSource;
@@ -39,13 +44,15 @@ public class SqlFlowIntegrationTest {
     private PostgresFlowDatabase db;
     private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
-    private static final String QUEUE = "test-queue";
-    private static final String WORKER_ID = "test-worker-1";
+    private String queueName;
+    private String workerId;
 
-    // --- Dummy Models ---
     public record MathParams(int a, int b) {}
     public record OrderParams(String orderId) {}
     public record PaymentEvent(boolean success, String ref) {}
+
+    private SqlFlowDispatcher dispatcher;
+    private PostgresQueueSignalListener signals;
 
     @BeforeAll
     static void setupDataSource() {
@@ -53,7 +60,7 @@ public class SqlFlowIntegrationTest {
         config.setJdbcUrl(postgres.getJdbcUrl());
         config.setUsername(postgres.getUsername());
         config.setPassword(postgres.getPassword());
-        config.setMaximumPoolSize(5);
+        config.setMaximumPoolSize(10);
         dataSource = new HikariDataSource(config);
     }
 
@@ -63,173 +70,179 @@ public class SqlFlowIntegrationTest {
     }
 
     @BeforeEach
-    public void setup() {
+    void setup() {
+        // Jeder Test bekommt eine komplett eigene Queue!
+        queueName = "test-queue-" + UUID.randomUUID().toString();
+        workerId = "worker-" + UUID.randomUUID().toString();
+
         db = new PostgresFlowDatabase(dataSource, mapper);
         sqlFlow = new SqlFlow(db, mapper);
-        sqlFlow.createQueue(QUEUE);
+
+        sqlFlow.createQueue(queueName);
+
+        signals = new PostgresQueueSignalListener(dataSource);
+        dispatcher = new DefaultSqlFlowDispatcher(sqlFlow, signals, new QueueSignalOptions(Duration.ofSeconds(30)));
     }
+
+    @AfterEach
+    void cleanup() throws Exception {
+        if (signals != null) {
+            signals.close();
+        }
+    }
+
 
     @Test
     @Order(1)
-    public void testBasicTaskExecution_Flow() throws Exception {
-        // ARRANGE
+    public void testBasicTaskExecution_Flow() throws Exception
+    {
         CompletableFuture<Integer> completionSource = new CompletableFuture<>();
 
-        sqlFlow.registerTask(new TaskRegistrationOptions("add-numbers", 3), (ctx, parameters) -> {
-            if (parameters == null || parameters.isNull()) {
-                throw new IllegalStateException("Expected JSON parameters");
-            }
-            int a = parameters.get("a").asInt();
-            int b = parameters.get("b").asInt();
-            int sum = a + b;
-            completionSource.complete(sum);
-            return sum;
-        });
+        sqlFlow.registerTask(
+                new TaskRegistrationOptions("add-numbers", 3),
+                (ctx, parameters) -> {
+                    int a = parameters.get("a").asInt();
+                    int b = parameters.get("b").asInt();
+                    int sum = a + b;
+                    completionSource.complete(sum);
+                    return sum;
+                });
 
-        // ACT
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
-        sqlFlow.spawn(options, "add-numbers", new MathParams(10, 20));
+        SpawnResult spawnResult = sqlFlow.spawn(
+                new SpawnOptions(queueName, 3, null, null),
+                "add-numbers",
+                new MathParams(10, 20));
 
-        SqlFlowWorker worker = new SqlFlowWorker(WorkerOptions.builder()
-                .workerId(WORKER_ID)
-                .queue(QUEUE)
-                .pollInterval(0.1) // Fast polling for tests
-                .concurrency(1)
-                .build(), sqlFlow);
+        try (WorkerInstance worker = createWorker())
+        {
+            worker.start();
 
-        Thread workerThread = Thread.ofVirtual().start(worker);
+            Integer result = completionSource.get(5, TimeUnit.SECONDS);
+            assertEquals(30, result);
 
-        // Wait for task completion (or timeout)
-        Integer result = completionSource.get(5, TimeUnit.SECONDS);
-        worker.close();
-        workerThread.join();
-
-        // ASSERT
-        assertEquals(30, result, "The worker should have summed 10 + 20 to get 30.");
+            assertTrue(waitForTaskState(spawnResult.taskId(), "completed"), "Task should complete in DB");
+        }
     }
 
     @Test
     @Order(2)
-    public void testCheckpointing_RecoversFromCrash() throws Exception {
-        // ARRANGE
-        AtomicInteger step1Count = new AtomicInteger(0);
+    public void testCheckpointing_RecoversFromCrash() throws Exception
+    {
+        AtomicInteger step1Count = new AtomicInteger();
         AtomicBoolean shouldCrash = new AtomicBoolean(true);
+        CompletableFuture<Void> completed = new CompletableFuture<>();
 
-        sqlFlow.registerTask(new TaskRegistrationOptions("checkpoint-task", 3), (ctx, parameters) -> {
-            ctx.step("charge-card", () -> {
-                step1Count.incrementAndGet();
-            });
+        sqlFlow.registerTask(
+                new TaskRegistrationOptions("checkpoint-task", 3),
+                (ctx, parameters) -> {
+                    ctx.step("charge-card", () -> step1Count.incrementAndGet());
 
-            if (shouldCrash.getAndSet(false)) {
-                throw new RuntimeException("Simulated crash right after Step 1!");
-            }
-            return "ORDER_COMPLETED";
-        });
+                    if (shouldCrash.getAndSet(false)) {
+                        throw new RuntimeException("Simulated crash after checkpoint.");
+                    }
 
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
-        SpawnResult spawnResult = sqlFlow.spawn(options, "checkpoint-task", new OrderParams("ORD-123"));
+                    completed.complete(null);
+                    return "ORDER_COMPLETED";
+                });
 
-        // ACT: Run worker until it processes the task (which will crash once, then retry)
-        SqlFlowWorker worker = new SqlFlowWorker(WorkerOptions.builder()
-                .workerId(WORKER_ID)
-                .queue(QUEUE)
-                .pollInterval(0.2)
-                .concurrency(1)
-                .build(), sqlFlow);
+        SpawnResult spawnResult = sqlFlow.spawn(
+                new SpawnOptions(queueName, 3, null, null),
+                "checkpoint-task",
+                new OrderParams("ORD-123"));
 
-        Thread workerThread = Thread.ofVirtual().start(worker);
+        try (WorkerInstance worker = createWorker())
+        {
+            worker.start();
 
-        // Wait until task reaches 'completed' state in DB (polling DB state)
-        boolean isCompleted = false;
-        for (int i = 0; i < 20; i++) {
-            if ("completed".equals(getTaskState(spawnResult.taskId()))) {
-                isCompleted = true;
-                break;
-            }
-            Thread.sleep(500);
+            completed.get(10, TimeUnit.SECONDS);
+
+            assertEquals(1, step1Count.get(), "Step 1 should execute only once because it was checkpointed.");
+
+            assertTrue(waitForTaskState(spawnResult.taskId(), "completed"), "Task should reach 'completed' state in the database.");
+            assertEquals("completed", getTaskState(spawnResult.taskId()));
         }
-
-        worker.close();
-        workerThread.join();
-
-        // ASSERT
-        assertTrue(isCompleted, "Task should ultimately complete successfully.");
-        // The core check: Step 1 must have run exactly ONCE because of the checkpoint!
-        assertEquals(1, step1Count.get(), "Step 1 should not execute again on the retry due to checkpoint.");
     }
 
     @Test
     @Order(3)
-    public void testEventSuspension_ResumesWhenEventEmitted() throws Exception {
-        // ARRANGE
+    public void testEventSuspension_ResumesWhenEventEmitted() throws Exception
+    {
         CompletableFuture<String> paymentRef = new CompletableFuture<>();
 
-        sqlFlow.registerTask(new TaskRegistrationOptions("event-task", 3), (ctx, parameters) -> {
-            String orderId = parameters.get("orderId").asText();
+        sqlFlow.registerTask(
+                new TaskRegistrationOptions("event-task", 3),
+                (ctx, parameters) -> {
+                    String orderId = parameters.get("orderId").asText();
 
-            // This throws SuspendTaskException internally if event is missing!
-            Optional<PaymentEvent> payment = ctx.awaitEvent(
-                    "payment-" + orderId, "wait-for-payment", null, PaymentEvent.class
-            );
+                    Optional<PaymentEvent> payment = ctx.awaitEvent(
+                            "payment-" + orderId,
+                            "wait-for-payment",
+                            null,
+                            PaymentEvent.class);
 
-            if (payment.isPresent() && payment.get().success()) {
-                paymentRef.complete(payment.get().ref());
-                return "PAID_" + payment.get().ref();
-            }
-            return "FAILED";
-        });
+                    if (payment.isPresent() && payment.get().success()) {
+                        paymentRef.complete(payment.get().ref());
+                        return "PAID_" + payment.get().ref();
+                    }
+                    return "FAILED";
+                });
 
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnResult spawnResult = sqlFlow.spawn(
+                new SpawnOptions(queueName, 3, null, null),
+                "event-task",
+                new OrderParams("999"));
 
-        SpawnResult spawnResult = sqlFlow.spawn(options, "event-task", new OrderParams("999"));
+        try (WorkerInstance worker = createWorker())
+        {
+            worker.start();
 
-        SqlFlowWorker worker = new SqlFlowWorker(WorkerOptions.builder()
-                .workerId(WORKER_ID)
-                .queue(QUEUE)
-                .pollInterval(0.2)
-                .concurrency(1)
-                .build(), sqlFlow);
+            assertTrue(waitForTaskState(spawnResult.taskId(), "sleeping"), "Task should be sleeping waiting for event.");
 
-        Thread workerThread = Thread.ofVirtual().start(worker);
+            sqlFlow.emitEvent(
+                    new EmitEventOptions(queueName),
+                    "payment-999",
+                    new PaymentEvent(true, "TX-12345"));
 
-        // Wait for the task to be suspended (state = 'sleeping' inside ssf.runs due to await_event logic)
-        for (int i = 0; i < 10; i++) {
-            if ("sleeping".equals(getTaskState(spawnResult.taskId()))) {
-                break;
-            }
-            Thread.sleep(300);
+            String ref = paymentRef.get(10, TimeUnit.SECONDS);
+            assertEquals("TX-12345", ref);
+
+            assertTrue(waitForTaskState(spawnResult.taskId(), "completed"), "Task should resume and complete after event emission.");
         }
-
-        assertEquals("sleeping", getTaskState(spawnResult.taskId()), "Task should be sleeping waiting for event.");
-
-        // ACT: Emit the event to wake it up
-        sqlFlow.emitEvent(new EmitEventOptions(QUEUE), "payment-999", new PaymentEvent(true, "TX-12345"));
-
-        // Wait for completion signaled by the CompletableFuture inside the lambda
-        String ref = paymentRef.get(5, TimeUnit.SECONDS);
-
-        worker.close();
-        workerThread.join();
-
-        // ASSERT
-        assertEquals("TX-12345", ref);
-        assertEquals("completed", getTaskState(spawnResult.taskId()));
     }
 
     @Test
     @Order(4)
     public void testCancelTask() throws Exception {
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(queueName, 3, null, null);
         SpawnResult spawnResult = sqlFlow.spawn(options, "dummy-task", new MathParams(5, 5));
 
-        // ACT: Cancel task before it is picked up
-        sqlFlow.cancelTask(new CancelTaskOptions(QUEUE), spawnResult.taskId());
+        sqlFlow.cancelTask(new CancelTaskOptions(queueName), spawnResult.taskId());
 
-        // ASSERT
         assertEquals("cancelled", getTaskState(spawnResult.taskId()));
     }
 
-    // --- Helper to read DB state directly ---
+    private WorkerInstance createWorker()
+    {
+        return new WorkerInstance(
+                WorkerOptions.builder()
+                        .workerId(workerId)
+                        .queue(queueName)
+                        .claimTimeout(120)
+                        .batchSize(1)
+                        .concurrency(1)
+                        .build(),
+                dispatcher);
+    }
+
+    private boolean waitForTaskState(String taskId, String targetState) throws Exception {
+        for (int i = 0; i < 20; i++) {
+            if (targetState.equals(getTaskState(taskId))) {
+                return true;
+            }
+            Thread.sleep(250);
+        }
+        return false;
+    }
 
     private String getTaskState(String taskId) throws SQLException {
         try (Connection conn = dataSource.getConnection();

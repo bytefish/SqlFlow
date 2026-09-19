@@ -12,6 +12,7 @@ import de.bytefish.sqlflow.core.models.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -179,5 +180,13 @@ public class SqlFlow implements ISqlFlow {
                 logger.error("Failed to mark run as failed: {}", failErr.getMessage());
             }
         }
+    }
+    @Override
+    public OffsetDateTime getNextAvailableAt(String queue) {
+        if (queue == null || queue.trim().isEmpty()) {
+            throw new IllegalArgumentException("Queue must be specified");
+        }
+
+        return db.getNextAvailableAt(queue);
     }
 }

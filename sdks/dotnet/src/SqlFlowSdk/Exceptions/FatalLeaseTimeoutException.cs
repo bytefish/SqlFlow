@@ -2,7 +2,14 @@
 
 namespace SqlFlowSdk.Exceptions;
 
-public class FatalLeaseTimeoutException : Exception
+public sealed class FatalLeaseTimeoutException : Exception
 {
-    public FatalLeaseTimeoutException(string message) : base(message) { }
+    public FatalLeaseTimeoutException(string message) : base(message)
+    {
+    }
+
+    public FatalLeaseTimeoutException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }

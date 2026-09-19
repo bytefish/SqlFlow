@@ -57,6 +57,8 @@ type CancelTaskOptions struct {
 type WorkerOptions struct {
 	WorkerID     string
 	QueueName    string
-	PollInterval time.Duration
+	BatchSize int
 	Concurrency  int
+    MaxTasksPerSecond int
+    RateLimitBurstSize int
 }

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -9,7 +10,7 @@ try:
 except ImportError:
     raise ImportError("The 'asyncpg' package is required for PostgreSQL support. Install with: pip install sqlflow-sdk[postgres]")
 
-from sqlflow.sdk import DatabaseDriver, SpawnResult
+from sqlflow.sdk import DatabaseDriver, SpawnResult, QueueSignalListener
 
 logger = logging.getLogger("sqlflow.postgres")
 
@@ -21,6 +22,81 @@ async def _init_connection(conn):
         decoder=json.loads,
         format="text"
     )
+
+class PostgresQueueSignalListener(QueueSignalListener):
+    def __init__(self, connection_string: str):
+        self._connection_string = (
+            connection_string
+        )
+
+        self._connection = None
+
+        self._queues = {}
+
+    async def register_queue(
+        self,
+        queue_name: str
+    ) -> None:
+
+        if queue_name in self._queues:
+            return
+
+        event = asyncio.Event()
+
+        #
+        # Initial reconciliation.
+        #
+        event.set()
+
+        self._queues[queue_name] = event
+
+    async def start(self):
+
+        self._connection = (
+            await asyncpg.connect(
+                self._connection_string
+            )
+        )
+
+        await self._connection.add_listener(
+            "ssf_work_available",
+            self._on_notification
+        )
+
+    async def _on_notification(
+        self,
+        connection,
+        pid,
+        channel,
+        payload
+    ):
+
+        event = (
+            self._queues.get(payload)
+        )
+
+        if event:
+            event.set()
+
+    async def wait_for_signal(
+        self,
+        queue_name: str,
+        timeout_seconds: float
+    ) -> bool:
+        event = self._queues[queue_name]
+
+        try:
+            await asyncio.wait_for(
+                event.wait(),
+                timeout_seconds
+            )
+
+            event.clear()
+
+            return True
+
+        except asyncio.TimeoutError:
+            return False
 
 class PostgresDriver(DatabaseDriver):
     """
@@ -34,6 +110,7 @@ class PostgresDriver(DatabaseDriver):
         :param dsn: The connection string (e.g., postgresql://user:pass@localhost:5432/mydb)
         """
         self.dsn = dsn
+        self._listener = None
         self._pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
@@ -137,7 +214,7 @@ class PostgresDriver(DatabaseDriver):
         return dict(row)
 
     async def emit_event(self, p_queue_name: str, p_event_name: str, p_payload: Any) -> None:
-        pool = self._ensure_pool()           
+        pool = self._ensure_pool()            
         await pool.execute(
             "CALL ssf.emit_event($1, $2, $3::jsonb)",
             p_queue_name, p_event_name, p_payload
@@ -150,3 +227,25 @@ class PostgresDriver(DatabaseDriver):
             p_queue_name, p_task_id
         )
             
+    async def get_next_available_at(self, p_queue_name: str) -> Optional[datetime]:
+        pool = self._ensure_pool()
+        row = await pool.fetchrow(
+            "SELECT ssf.get_next_available_at($1)",
+            p_queue_name
+        )
+        return row[0] if row else None
+
+    async def create_queue_signal_listener(self) -> QueueSignalListener:
+
+        if self._listener is not None:
+            return self._listener
+
+        listener = PostgresQueueSignalListener(
+            self.dsn
+        )
+
+        await listener.start()
+
+        self._listener = listener
+
+        return listener

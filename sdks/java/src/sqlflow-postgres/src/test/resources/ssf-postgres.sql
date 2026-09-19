@@ -3,6 +3,22 @@ CREATE SCHEMA IF NOT EXISTS ssf;
 -- ==========================================
 -- FUNCTIONS & HELPERS
 -- ==========================================
+CREATE OR REPLACE FUNCTION ssf.notify_queue(
+    p_queue_name TEXT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_queue_name IS NOT NULL THEN
+        PERFORM pg_notify(
+            'ssf_work_available',
+            p_queue_name
+        );
+    END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION ssf.current_time_fn()
 RETURNS TIMESTAMPTZ
 LANGUAGE plpgsql
@@ -274,8 +290,24 @@ BEGIN
         VALUES (p_queue_name, v_task_id, p_task_name, p_params, v_headers, v_retry_strategy, v_max_attempts, v_cancellation, v_now, 'pending', v_attempt, v_run_id);
     END IF;
 
-    INSERT INTO ssf.runs (queue_name, run_id, task_id, attempt, state, available_at)
-    VALUES (p_queue_name, v_run_id, v_task_id, v_attempt, 'pending', v_now);
+    INSERT INTO ssf.runs (
+        queue_name,
+        run_id,
+        task_id,
+        attempt,
+        state,
+        available_at
+    )
+    VALUES (
+        p_queue_name,
+        v_run_id,
+        v_task_id,
+        v_attempt,
+        'pending',
+        v_now
+    );
+
+    PERFORM ssf.notify_queue(p_queue_name);
         
     RETURN QUERY SELECT v_task_id, v_run_id, v_attempt, TRUE;
 END;
@@ -407,24 +439,54 @@ CREATE OR REPLACE PROCEDURE ssf.schedule_run(
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    v_now TIMESTAMPTZ := ssf.current_time_fn();
     v_task_id UUID;
+    v_new_state VARCHAR(50);
+    v_available_at TIMESTAMPTZ;
 BEGIN
-    SELECT task_id INTO v_task_id
-    FROM ssf.runs
-    WHERE queue_name = p_queue_name AND run_id = p_run_id AND state = 'running'
+    IF p_wake_at IS NULL THEN
+        RAISE EXCEPTION 'wake_at must be provided'
+            USING ERRCODE = '50025';
+    END IF;
+
+    SELECT r.task_id
+    INTO v_task_id
+    FROM ssf.runs r
+    WHERE r.queue_name = p_queue_name
+      AND r.run_id = p_run_id
+      AND r.state = 'running'
     FOR UPDATE;
 
     IF v_task_id IS NULL THEN
-        RAISE EXCEPTION 'Run is not currently running or does not exist.' USING ERRCODE = '50007';
+        RAISE EXCEPTION
+            'Run is not currently running or does not exist.'
+            USING ERRCODE = '50007';
     END IF;
 
-    UPDATE ssf.runs 
-    SET state = 'sleeping', claimed_by = NULL, claim_expires_at = NULL, available_at = p_wake_at, wake_event = NULL 
+    IF p_wake_at <= v_now THEN
+        v_new_state := 'pending';
+        v_available_at := v_now;
+    ELSE
+        v_new_state := 'sleeping';
+        v_available_at := p_wake_at;
+    END IF;
+
+    UPDATE ssf.runs
+    SET state = v_new_state,
+        claimed_by = NULL,
+        claim_expires_at = NULL,
+        available_at = v_available_at,
+        wake_event = NULL,
+        event_payload = NULL
     WHERE queue_name = p_queue_name AND run_id = p_run_id;
 
-    UPDATE ssf.tasks 
-    SET state = 'sleeping' 
+    UPDATE ssf.tasks
+    SET state = v_new_state
     WHERE queue_name = p_queue_name AND task_id = v_task_id;
+
+    IF v_new_state = 'pending' THEN
+        PERFORM ssf.notify_queue(p_queue_name);
+    END IF;
 END;
 $$;
 
@@ -439,14 +501,14 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_now TIMESTAMPTZ := ssf.current_time_fn();
-    
+
     v_task_id UUID;
     v_attempt INT;
     v_retry_strategy JSONB;
     v_max_attempts INT;
     v_first_started TIMESTAMPTZ;
     v_cancellation JSONB;
-    
+
     v_next_attempt INT;
     v_delay_seconds DOUBLE PRECISION := 0;
     v_next_available TIMESTAMPTZ;
@@ -456,54 +518,102 @@ DECLARE
     v_max_seconds DOUBLE PRECISION;
     v_max_duration BIGINT;
     v_task_cancel BOOLEAN := FALSE;
-    
+
     v_new_run_id UUID;
     v_task_state_after VARCHAR(50);
     v_recorded_attempt INT;
     v_last_attempt_run UUID := p_run_id;
     v_cancelled_at TIMESTAMPTZ := NULL;
 BEGIN
-    SELECT task_id, attempt INTO v_task_id, v_attempt
+    SELECT
+        task_id,
+        attempt
+    INTO
+        v_task_id,
+        v_attempt
     FROM ssf.runs
-    WHERE queue_name = p_queue_name AND run_id = p_run_id AND state IN ('running', 'sleeping')
+    WHERE queue_name = p_queue_name
+      AND run_id = p_run_id
+      AND state IN ('running', 'sleeping')
     FOR UPDATE;
 
     IF v_task_id IS NULL THEN
-        RAISE EXCEPTION 'Run cannot be failed.' USING ERRCODE = '50008';
+        RAISE EXCEPTION 'Run cannot be failed.'
+            USING ERRCODE = '50008';
     END IF;
 
-    SELECT retry_strategy, max_attempts, first_started_at, cancellation 
-    INTO v_retry_strategy, v_max_attempts, v_first_started, v_cancellation
+    SELECT
+        retry_strategy,
+        max_attempts,
+        first_started_at,
+        cancellation
+    INTO
+        v_retry_strategy,
+        v_max_attempts,
+        v_first_started,
+        v_cancellation
     FROM ssf.tasks
-    WHERE queue_name = p_queue_name AND task_id = v_task_id
+    WHERE queue_name = p_queue_name
+      AND task_id = v_task_id
     FOR UPDATE;
 
     v_next_attempt := v_attempt + 1;
     v_task_state_after := 'failed';
     v_recorded_attempt := v_attempt;
 
-    IF v_max_attempts IS NULL OR v_next_attempt <= v_max_attempts THEN
+    IF v_max_attempts IS NULL
+       OR v_next_attempt <= v_max_attempts THEN
+
         IF p_retry_at IS NOT NULL THEN
             v_next_available := p_retry_at;
         ELSE
-            v_retry_kind := COALESCE(v_retry_strategy->>'kind', 'none');
+            v_retry_kind :=
+                COALESCE(v_retry_strategy->>'kind', 'none');
+
             IF v_retry_kind = 'fixed' THEN
-                v_base := COALESCE((v_retry_strategy->>'base_seconds')::DOUBLE PRECISION, 60.0);
+                v_base := COALESCE(
+                    (v_retry_strategy->>'base_seconds')
+                        ::DOUBLE PRECISION,
+                    60.0
+                );
+
                 v_delay_seconds := v_base;
+
             ELSIF v_retry_kind = 'exponential' THEN
-                v_base := COALESCE((v_retry_strategy->>'base_seconds')::DOUBLE PRECISION, 30.0);
-                v_factor := COALESCE((v_retry_strategy->>'factor')::DOUBLE PRECISION, 2.0);
-                v_delay_seconds := v_base * power(v_factor, CASE WHEN v_attempt - 1 > 0 THEN v_attempt - 1 ELSE 0 END);
-                
-                v_max_seconds := (v_retry_strategy->>'max_seconds')::DOUBLE PRECISION;
-                IF v_max_seconds IS NOT NULL AND v_delay_seconds > v_max_seconds THEN
+                v_base := COALESCE(
+                    (v_retry_strategy->>'base_seconds')
+                        ::DOUBLE PRECISION,
+                    30.0
+                );
+
+                v_factor := COALESCE(
+                    (v_retry_strategy->>'factor')
+                        ::DOUBLE PRECISION,
+                    2.0
+                );
+
+                v_delay_seconds :=
+                    v_base * power(
+                        v_factor,
+                        GREATEST(v_attempt - 1, 0)
+                    );
+
+                v_max_seconds :=
+                    (v_retry_strategy->>'max_seconds')
+                        ::DOUBLE PRECISION;
+
+                IF v_max_seconds IS NOT NULL
+                   AND v_delay_seconds > v_max_seconds THEN
                     v_delay_seconds := v_max_seconds;
                 END IF;
             ELSE
                 v_delay_seconds := 0;
             END IF;
-            
-            v_next_available := v_now + (v_delay_seconds || ' seconds')::INTERVAL;
+
+            v_next_available :=
+                v_now + make_interval(
+                    secs => v_delay_seconds
+                );
         END IF;
 
         IF v_next_available < v_now THEN
@@ -511,16 +621,28 @@ BEGIN
         END IF;
 
         IF v_cancellation IS NOT NULL THEN
-            v_max_duration := (v_cancellation->>'max_duration')::BIGINT;
-            IF v_max_duration IS NOT NULL AND v_first_started IS NOT NULL THEN
-                IF EXTRACT(EPOCH FROM (v_next_available - v_first_started)) >= v_max_duration THEN
-                    v_task_cancel := TRUE;
-                END IF;
+            v_max_duration :=
+                (v_cancellation->>'max_duration')::BIGINT;
+
+            IF v_max_duration IS NOT NULL
+               AND v_first_started IS NOT NULL
+               AND EXTRACT(
+                   EPOCH FROM (
+                       v_next_available - v_first_started
+                   )
+               ) >= v_max_duration THEN
+                v_task_cancel := TRUE;
             END IF;
         END IF;
 
         IF v_task_cancel = FALSE THEN
-            v_task_state_after := CASE WHEN v_next_available > v_now THEN 'sleeping' ELSE 'pending' END;
+            v_task_state_after :=
+                CASE
+                    WHEN v_next_available > v_now
+                        THEN 'sleeping'
+                    ELSE 'pending'
+                END;
+
             v_new_run_id := gen_random_uuid();
             v_recorded_attempt := v_next_attempt;
             v_last_attempt_run := v_new_run_id;
@@ -530,30 +652,64 @@ BEGIN
     IF v_task_cancel = TRUE THEN
         v_task_state_after := 'cancelled';
         v_cancelled_at := v_now;
-        v_recorded_attempt := CASE WHEN v_recorded_attempt > v_attempt THEN v_recorded_attempt ELSE v_attempt END;
+        v_recorded_attempt :=
+            GREATEST(v_recorded_attempt, v_attempt);
         v_last_attempt_run := p_run_id;
     END IF;
 
-    UPDATE ssf.runs 
-    SET state = 'failed', wake_event = NULL, failed_at = v_now, failure_reason = p_reason 
-    WHERE queue_name = p_queue_name AND run_id = p_run_id;
+    UPDATE ssf.runs
+    SET state = 'failed',
+        wake_event = NULL,
+        claimed_by = NULL,
+        claim_expires_at = NULL,
+        failed_at = v_now,
+        failure_reason = p_reason
+    WHERE queue_name = p_queue_name
+      AND run_id = p_run_id;
 
     IF v_new_run_id IS NOT NULL THEN
-        INSERT INTO ssf.runs (queue_name, run_id, task_id, attempt, state, available_at)
-        VALUES (p_queue_name, v_new_run_id, v_task_id, v_next_attempt, v_task_state_after, v_next_available);
+        INSERT INTO ssf.runs (
+            queue_name,
+            run_id,
+            task_id,
+            attempt,
+            state,
+            available_at
+        )
+        VALUES (
+            p_queue_name,
+            v_new_run_id,
+            v_task_id,
+            v_next_attempt,
+            v_task_state_after,
+            v_next_available
+        );
     END IF;
 
-    UPDATE ssf.tasks 
-    SET state = v_task_state_after, 
-        attempts = CASE WHEN attempts > v_recorded_attempt THEN attempts ELSE v_recorded_attempt END, 
-        last_attempt_run = v_last_attempt_run, 
-        cancelled_at = COALESCE(cancelled_at, v_cancelled_at) 
-    WHERE queue_name = p_queue_name AND task_id = v_task_id;
+    UPDATE ssf.tasks
+    SET state = v_task_state_after,
+        attempts = GREATEST(
+            attempts,
+            v_recorded_attempt
+        ),
+        last_attempt_run = v_last_attempt_run,
+        cancelled_at = COALESCE(
+            cancelled_at,
+            v_cancelled_at
+        )
+    WHERE queue_name = p_queue_name
+      AND task_id = v_task_id;
 
-    DELETE FROM ssf.waits WHERE queue_name = p_queue_name AND run_id = p_run_id;
+    DELETE FROM ssf.waits
+    WHERE queue_name = p_queue_name
+      AND run_id = p_run_id;
+
+    IF v_new_run_id IS NOT NULL
+       AND v_task_state_after = 'pending' THEN
+        PERFORM ssf.notify_queue(p_queue_name);
+    END IF;
 END;
 $$;
-
 
 CREATE OR REPLACE PROCEDURE ssf.set_task_checkpoint_state(
     p_queue_name TEXT,
@@ -821,7 +977,6 @@ BEGIN
 END;
 $$;
 
-
 CREATE OR REPLACE PROCEDURE ssf.emit_event(
     p_queue_name TEXT,
     p_event_name TEXT,
@@ -834,79 +989,158 @@ DECLARE
     v_payload JSONB := COALESCE(p_payload, 'null'::jsonb);
     v_emit_applied INT;
 BEGIN
-    IF p_event_name IS NULL OR length(trim(p_event_name)) = 0 THEN
-        RAISE EXCEPTION 'event_name must be provided' USING ERRCODE = '50021';
+    IF p_event_name IS NULL
+       OR length(trim(p_event_name)) = 0 THEN
+        RAISE EXCEPTION 'event_name must be provided'
+            USING ERRCODE = '50021';
     END IF;
 
     UPDATE ssf.events
-    SET payload = v_payload, emitted_at = v_now
-    WHERE queue_name = p_queue_name AND event_name = p_event_name AND payload IS NULL;
+    SET payload = v_payload,
+        emitted_at = v_now
+    WHERE queue_name = p_queue_name
+      AND event_name = p_event_name
+      AND payload IS NULL;
 
     GET DIAGNOSTICS v_emit_applied = ROW_COUNT;
 
     IF v_emit_applied = 0 THEN
         BEGIN
-            INSERT INTO ssf.events (queue_name, event_name, payload, emitted_at)
-            VALUES (p_queue_name, p_event_name, v_payload, v_now);
+            INSERT INTO ssf.events (
+                queue_name,
+                event_name,
+                payload,
+                emitted_at
+            )
+            VALUES (
+                p_queue_name,
+                p_event_name,
+                v_payload,
+                v_now
+            );
+
             v_emit_applied := 1;
         EXCEPTION WHEN unique_violation THEN
-            v_emit_applied := 0; 
+            v_emit_applied := 0;
         END;
     END IF;
 
-    IF v_emit_applied = 0 THEN RETURN; END IF;
+    IF v_emit_applied = 0 THEN
+        RETURN;
+    END IF;
 
     CREATE TEMP TABLE IF NOT EXISTS affected_runs_temp (
-        run_id UUID, 
-        task_id UUID, 
+        run_id UUID,
+        task_id UUID,
         step_name TEXT
     ) ON COMMIT DROP;
-    
+
     TRUNCATE affected_runs_temp;
 
     DELETE FROM ssf.waits
-    WHERE queue_name = p_queue_name AND event_name = p_event_name AND timeout_at IS NOT NULL AND timeout_at <= v_now;
+    WHERE queue_name = p_queue_name
+      AND event_name = p_event_name
+      AND timeout_at IS NOT NULL
+      AND timeout_at <= v_now;
 
-    INSERT INTO affected_runs_temp (run_id, task_id, step_name)
-    SELECT run_id, task_id, step_name FROM ssf.waits
-    WHERE queue_name = p_queue_name AND event_name = p_event_name AND (timeout_at IS NULL OR timeout_at > v_now);
+    INSERT INTO affected_runs_temp (
+        run_id,
+        task_id,
+        step_name
+    )
+    SELECT
+        run_id,
+        task_id,
+        step_name
+    FROM ssf.waits
+    WHERE queue_name = p_queue_name
+      AND event_name = p_event_name
+      AND (
+          timeout_at IS NULL
+          OR timeout_at > v_now
+      );
 
     CREATE TEMP TABLE IF NOT EXISTS updated_runs_temp (
-        run_id UUID, 
+        run_id UUID,
         task_id UUID
     ) ON COMMIT DROP;
-    
+
     TRUNCATE updated_runs_temp;
 
     WITH upd AS (
         UPDATE ssf.runs r
-        SET state = 'pending', available_at = v_now, wake_event = NULL, event_payload = v_payload, claimed_by = NULL, claim_expires_at = NULL
-        FROM affected_runs_temp a 
-        WHERE r.queue_name = p_queue_name AND r.run_id = a.run_id AND r.state = 'sleeping'
+        SET state = 'pending',
+            available_at = v_now,
+            wake_event = NULL,
+            event_payload = v_payload,
+            claimed_by = NULL,
+            claim_expires_at = NULL
+        FROM affected_runs_temp a
+        WHERE r.queue_name = p_queue_name
+          AND r.run_id = a.run_id
+          AND r.state = 'sleeping'
         RETURNING r.run_id, r.task_id
     )
-    INSERT INTO updated_runs_temp (run_id, task_id)
-    SELECT run_id, task_id FROM upd;
+    INSERT INTO updated_runs_temp (
+        run_id,
+        task_id
+    )
+    SELECT
+        run_id,
+        task_id
+    FROM upd;
 
-    -- Merge Checkpoints (UPSERT)
-    INSERT INTO ssf.checkpoints (queue_name, task_id, checkpoint_name, state, status, owner_run_id, updated_at)
-    SELECT p_queue_name, a.task_id, a.step_name, v_payload, 'committed', u.run_id, v_now
-    FROM affected_runs_temp a 
-    JOIN updated_runs_temp u ON a.run_id = u.run_id
-    ON CONFLICT (queue_name, task_id, checkpoint_name) DO UPDATE 
-    SET state = EXCLUDED.state, status = EXCLUDED.status, owner_run_id = EXCLUDED.owner_run_id, updated_at = EXCLUDED.updated_at;
+    INSERT INTO ssf.checkpoints (
+        queue_name,
+        task_id,
+        checkpoint_name,
+        state,
+        status,
+        owner_run_id,
+        updated_at
+    )
+    SELECT
+        p_queue_name,
+        a.task_id,
+        a.step_name,
+        v_payload,
+        'committed',
+        u.run_id,
+        v_now
+    FROM affected_runs_temp a
+    JOIN updated_runs_temp u
+      ON a.run_id = u.run_id
+    ON CONFLICT (
+        queue_name,
+        task_id,
+        checkpoint_name
+    )
+    DO UPDATE
+    SET state = EXCLUDED.state,
+        status = EXCLUDED.status,
+        owner_run_id = EXCLUDED.owner_run_id,
+        updated_at = EXCLUDED.updated_at;
 
     UPDATE ssf.tasks t
     SET state = 'pending'
-    FROM updated_runs_temp u 
-    WHERE t.queue_name = p_queue_name AND t.task_id = u.task_id;
+    FROM updated_runs_temp u
+    WHERE t.queue_name = p_queue_name
+      AND t.task_id = u.task_id;
 
     DELETE FROM ssf.waits w
-    USING updated_runs_temp u 
-    WHERE w.queue_name = p_queue_name AND w.run_id = u.run_id AND w.event_name = p_event_name;
+    USING updated_runs_temp u
+    WHERE w.queue_name = p_queue_name
+      AND w.run_id = u.run_id
+      AND w.event_name = p_event_name;
+
+    IF EXISTS (
+        SELECT 1
+        FROM updated_runs_temp
+    ) THEN
+        PERFORM ssf.notify_queue(p_queue_name);
+    END IF;
 END;
 $$;
-
 
 CREATE OR REPLACE PROCEDURE ssf.cancel_task(
     p_queue_name TEXT,
@@ -950,7 +1184,6 @@ BEGIN
     WHERE queue_name = p_queue_name AND task_id = p_task_id;
 END;
 $$;
-
 
 CREATE OR REPLACE FUNCTION ssf.cleanup_tasks(
     p_queue_name TEXT,

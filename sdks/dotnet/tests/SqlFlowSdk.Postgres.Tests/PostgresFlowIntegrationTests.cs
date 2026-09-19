@@ -1,45 +1,43 @@
-﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+﻿// Licensed under the MIT license.
+// See LICENSE file in the project root for full license information.
 
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using SqlFlowSdk.Core;
 using SqlFlowSdk.Database;
-using SqlFlowSdk.SqlServer.Database;
 using SqlFlowSdk.Workers;
 using System.Collections.Concurrent;
-using System.Data.Common;
 using System.Threading.Channels;
 
-namespace SqlFlowSdk.SqlServer.Tests;
+namespace SqlFlowSdk.Postgres.Tests;
 
 [TestClass]
-public class SqlServerFlowIntegrationTests
+public class PostgresFlowIntegrationTests
 {
     private static string ConnectionString = null!;
 
-    /// <summary>
-    /// Starts the Containers for the Tests.
-    /// </summary>
-    /// <param name="context">Required Test Context</param>
-    /// <returns>Awaitable Task</returns>
     [AssemblyInitialize]
-    public static async Task AssemblyInitializeAsync(TestContext context)
+    public static async Task AssemblyInitializeAsync(
+        TestContext context)
     {
         await DockerContainers.StartAllContainersAsync();
 
-        ConnectionString = DockerContainers.ConnectionString;
+        ConnectionString =
+            DockerContainers.PostgresContainer.GetConnectionString();
     }
+
     [TestMethod]
     public async Task Test_BasicTaskExecution_Flow()
     {
-
         // Arrange
         const string queueName = "test-queue";
         const string taskName = "add-numbers";
 
-        await using DbDataSource dataSource = SqlClientFactory.Instance.CreateDataSource(ConnectionString);
+        await using NpgsqlDataSource dataSource =
+            NpgsqlDataSource.Create(ConnectionString);
 
-        ISqlFlowDatabase database = new SqlServerFlowDatabase();
+        ISqlFlowDatabase database =
+            new PostgresFlowDatabase();
 
         await using var client = new SqlFlow(
             NullLogger<SqlFlow>.Instance,
