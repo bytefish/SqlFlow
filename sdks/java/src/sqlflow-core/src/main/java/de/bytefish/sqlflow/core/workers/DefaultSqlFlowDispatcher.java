@@ -9,6 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -121,9 +123,33 @@ public final class DefaultSqlFlowDispatcher implements SqlFlowDispatcher {
         while (running.get() && !Thread.currentThread().isInterrupted()) {
             try {
                 if (!queueMayContainWork) {
-                    signals.waitForSignal(
-                            options.queue(),
-                            signalOptions.reconciliationInterval());
+                    Duration delay = signalOptions.reconciliationInterval();
+                    boolean skipWait = false;
+
+                    try {
+                        OffsetDateTime nextAvailableAt = client.getNextAvailableAt(options.queue());
+
+                        if (nextAvailableAt != null) {
+                            Duration timeUntilNextJob = Duration.between(OffsetDateTime.now(ZoneOffset.UTC), nextAvailableAt);
+
+                            if (timeUntilNextJob.isNegative() || timeUntilNextJob.isZero()) {
+                                skipWait = true;
+                            } else if (timeUntilNextJob.compareTo(delay) < 0) {
+                                delay = timeUntilNextJob;
+                            }
+                        }
+                    } catch (Exception ex) {
+                        logger.warn(
+                                "Failed to retrieve next available time for queue '{}'. Falling back to default reconciliation interval.",
+                                options.queue(),
+                                ex);
+                    }
+
+                    if (!skipWait && delay.toMillis() > 0) {
+                        signals.waitForSignal(
+                                options.queue(),
+                                delay);
+                    }
                 }
 
                 queueMayContainWork =

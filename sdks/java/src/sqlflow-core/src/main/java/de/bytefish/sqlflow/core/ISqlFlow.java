@@ -6,6 +6,7 @@ import de.bytefish.sqlflow.core.infrastructure.JobFactory;
 import de.bytefish.sqlflow.core.infrastructure.TaskHandler;
 import de.bytefish.sqlflow.core.models.*;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 
@@ -33,6 +34,8 @@ public interface ISqlFlow {
     void workBatch(String queue, String workerId, int claimTimeout, int batchSize);
 
     void executeTask(ClaimedTask task, String queue, int claimTimeout, boolean fatalOnLeaseTimeout);
+
+    OffsetDateTime getNextAvailableAt(String queue);
 
     /**
      * Provides an elegant default method to bridge the core functional SDK with strongly-typed Job interfaces and Dependency Injection.

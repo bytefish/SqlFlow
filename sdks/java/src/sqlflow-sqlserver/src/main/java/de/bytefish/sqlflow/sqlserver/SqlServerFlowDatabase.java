@@ -13,6 +13,7 @@ import de.bytefish.sqlflow.core.models.SpawnResult;
 import javax.sql.DataSource;
 import java.sql.*;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -57,6 +58,24 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
                  ResultSet rs = cmd.executeQuery()) {
                 while (rs.next()) results.add(rs.getString(1));
                 return results;
+            }
+        });
+    }
+
+    @Override
+    public OffsetDateTime getNextAvailableAt(String queue) {
+        return execute(conn -> {
+            String sql = "EXEC ssf.get_next_available_at ?";
+
+            try (PreparedStatement cmd = conn.prepareStatement(sql)) {
+                cmd.setString(1, queue);
+
+                try (ResultSet rs = cmd.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getObject(1, OffsetDateTime.class);
+                    }
+                    return null;
+                }
             }
         });
     }
