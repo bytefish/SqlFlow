@@ -3,7 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
-    "sync"
+	"sync"
 	"time"
 
 	"github.com/bytefish/SqlFlow/sdks/go"
@@ -12,8 +12,10 @@ import (
 )
 
 type PostgresDriver struct {
-	pool *pgxpool.Pool
-    connString string
+	pool       *pgxpool.Pool
+	connString string
+	listener   sqlflow.QueueSignalListener
+	mu         sync.Mutex
 }
 
 func NewPostgresDriver(ctx context.Context, connString string) (*PostgresDriver, error) {
@@ -21,10 +23,20 @@ func NewPostgresDriver(ctx context.Context, connString string) (*PostgresDriver,
 	if err != nil {
 		return nil, err
 	}
-	return &PostgresDriver{pool: pool, connString: connString,}, nil
+	return &PostgresDriver{
+		pool:       pool,
+		connString: connString,
+	}, nil
 }
 
 func (p *PostgresDriver) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if listener, ok := p.listener.(*PostgresQueueSignalListener); ok {
+		listener.Close()
+	}
+
 	p.pool.Close()
 }
 
@@ -48,21 +60,26 @@ func (p *PostgresDriver) SpawnTask(ctx context.Context, queueName string, taskNa
 }
 
 func (p *PostgresDriver) CreateQueueSignalListener(
-    ctx context.Context,
+	ctx context.Context,
 ) (sqlflow.QueueSignalListener, error) {
 
-    listener :=
-        NewPostgresQueueSignalListener(
-            p.connString,
-        )
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-    err := listener.Start(ctx)
+	if p.listener != nil {
+		return p.listener, nil
+	}
 
-    if err != nil {
-        return nil, err
-    }
+	listener := NewPostgresQueueSignalListener(p.connString)
 
-    return listener, nil
+	err := listener.Start(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	p.listener = listener
+
+	return listener, nil
 }
 
 func (p *PostgresDriver) ClaimTask(ctx context.Context, queueName string, workerID string, claimTimeout int, qty int) ([]sqlflow.ClaimedTask, error) {
@@ -164,12 +181,15 @@ func (p *PostgresDriver) GetNextAvailableAt(ctx context.Context, queueName strin
 	return nextAvailableAt, nil
 }
 
+
 type PostgresQueueSignalListener struct {
 	connString string
 
 	mu sync.RWMutex
 
 	signals map[string]chan bool
+	
+	cancelCtx context.CancelFunc
 }
 
 func NewPostgresQueueSignalListener(
@@ -183,116 +203,133 @@ func NewPostgresQueueSignalListener(
 }
 
 func (p *PostgresQueueSignalListener) RegisterQueue(
-    ctx context.Context,
-    queueName string,
+	ctx context.Context,
+	queueName string,
 ) error {
 
-    p.mu.Lock()
-    defer p.mu.Unlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-    if _, ok := p.signals[queueName]; ok {
-        return nil
-    }
+	if _, ok := p.signals[queueName]; ok {
+		return nil
+	}
 
-    ch :=
-        make(
-            chan bool,
-            1,
-        )
+	ch :=
+		make(
+			chan bool,
+			1,
+		)
 
-    //
-    // Initial reconciliation.
-    //
-    ch <- true
+	ch <- true
 
-    p.signals[queueName] =
-        ch
+	p.signals[queueName] =
+		ch
 
-    return nil
+	return nil
 }
 
 func (p *PostgresQueueSignalListener) WaitForSignal(
-    ctx context.Context,
-    queueName string,
-    timeout time.Duration,
+	ctx context.Context,
+	queueName string,
+	timeout time.Duration,
 ) (bool, error) {
 
-    p.mu.RLock()
+	p.mu.RLock()
 
-    ch :=
-        p.signals[queueName]
+	ch :=
+		p.signals[queueName]
 
-    p.mu.RUnlock()
+	p.mu.RUnlock()
 
-    select {
+	if ch == nil {
+		select {
+		case <-time.After(timeout):
+			return false, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
 
-    case <-ch:
-        return true, nil
+	select {
 
-    case <-time.After(timeout):
-        return false, nil
+	case <-ch:
+		return true, nil
 
-    case <-ctx.Done():
-        return false, ctx.Err()
-    }
+	case <-time.After(timeout):
+		return false, nil
+
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func (p *PostgresQueueSignalListener) Start(
-    ctx context.Context,
+	ctx context.Context,
 ) error {
 
-    conn, err :=
-        pgx.Connect(
-            ctx,
-            p.connString,
-        )
+	listenerCtx, cancel := context.WithCancel(context.Background())
+	p.cancelCtx = cancel
 
-    if err != nil {
-        return err
-    }
+	conn, err :=
+		pgx.Connect(
+			listenerCtx,
+			p.connString,
+		)
 
-    _, err =
-        conn.Exec(
-            ctx,
-            "LISTEN ssf_work_available",
-        )
+	if err != nil {
+		return err
+	}
 
-    if err != nil {
-        return err
-    }
+	_, err =
+		conn.Exec(
+			listenerCtx,
+			"LISTEN ssf_work_available",
+		)
 
-    go func() {
+	if err != nil {
+		conn.Close(context.Background())
+		return err
+	}
 
-        defer conn.Close(
-            context.Background(),
-        )
+	go func() {
 
-        for {
+		defer conn.Close(
+			context.Background(),
+		)
 
-            notification, err :=
-                conn.WaitForNotification(
-                    ctx,
-                )
+		for {
 
-            if err != nil {
+			notification, err :=
+				conn.WaitForNotification(
+					listenerCtx,
+				)
 
-                if ctx.Err() != nil {
-                    return
-                }
+			if err != nil {
 
-                continue
-            }
+				if listenerCtx.Err() != nil {
+					return
+				}
 
-            queueName :=
-                notification.Payload
+				time.Sleep(time.Second)
+				continue
+			}
 
-            p.signalQueue(
-                queueName,
-            )
-        }
-    }()
+			queueName :=
+				notification.Payload
 
-    return nil
+			p.signalQueue(
+				queueName,
+			)
+		}
+	}()
+
+	return nil
+}
+
+func (p *PostgresQueueSignalListener) Close() {
+	if p.cancelCtx != nil {
+		p.cancelCtx()
+	}
 }
 
 func (p *PostgresQueueSignalListener) signalQueue(queueName string) {
@@ -316,4 +353,4 @@ func (p *PostgresQueueSignalListener) signalQueue(queueName string) {
 	}
 }
 
-var _ sqlflow.QueueSignalListener =	(*PostgresQueueSignalListener)(nil)
+var _ sqlflow.QueueSignalListener = (*PostgresQueueSignalListener)(nil)
