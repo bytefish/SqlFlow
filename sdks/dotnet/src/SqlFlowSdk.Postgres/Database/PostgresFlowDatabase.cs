@@ -325,6 +325,28 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         return result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
     }
 
+    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string queue, CancellationToken cancellationToken)
+    {
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "ssf.get_next_available_at";
+        cmd.CommandType = CommandType.StoredProcedure;
+
+        var param = cmd.CreateParameter();
+        param.ParameterName = "p_queue_name";
+        param.Value = queue;
+        cmd.Parameters.Add(param);
+
+        object? result = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+
+        if (result != null && result != DBNull.Value)
+        {
+            if (result is DateTime dt) return new DateTimeOffset(dt);
+            if (result is DateTimeOffset dto) return dto;
+        }
+
+        return null;
+    }
+
     private static JsonNode? ParseJson(NpgsqlDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal))

@@ -111,6 +111,15 @@ public interface ISqlFlow
     /// <param name="fatalOnLeaseTimeout">A value indicating whether to treat lease timeout as a fatal error.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task ExecuteTaskAsync(ClaimedTask task, string queue, int claimTimeout, CancellationToken cancellationToken, bool fatalOnLeaseTimeout = false);
+
+    /// <summary>
+    /// Gets the next available time for a task to be executed in the specified message queue. This can be used to determine when a worker can
+    /// claim the next task.
+    /// </summary>
+    /// <param name="queue">The message queue to check.</param>
+    /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task<DateTimeOffset?> GetNextAvailableAtAsync(string queue, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -139,6 +148,13 @@ public interface ISqlFlowClient
     /// <returns>A task representing the asynchronous operation.</returns>
     Task EmitEventAsync(EmitEventOptions options, string eventName, object? payload = null);
 
+    /// <summary>
+    /// Cancels a pending or claimed task with the specified ID. The task will be removed from the queue and will not be executed if it has not
+    /// already been processed.
+    /// </summary>
+    /// <param name="options">The options for canceling the task.</param>
+    /// <param name="taskId">The ID of the task to cancel.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
     Task CancelTaskAsync(CancelTaskOptions options, string taskId);
 }
 

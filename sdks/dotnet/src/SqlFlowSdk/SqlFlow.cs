@@ -412,40 +412,18 @@ public void RegisterTask(
         }
     }
 
-    private async Task TryFailRunAsync(
-    DbConnection connection,
-    string queue,
-    string runId,
-    Exception exception,
-    CancellationToken cancellationToken)
+    /// <summary>
+    /// Returns the next available time for a task in the specified queue. This can be used to determine when a worker should 
+    /// claim the next task.
+    /// </summary>
+    /// <param name="queue">The message queue to check.</param>
+    /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(string queue, CancellationToken cancellationToken)
     {
-        try
-        {
-            string failure = JsonSerializer.Serialize(new
-            {
-                name = exception.GetType().Name,
-                message = exception.Message,
-                stack = exception.StackTrace
-            });
+        await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-            await _db.FailRunAsync(
-                connection,
-                queue,
-                runId,
-                failure,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (CancelledTaskException)
-        {
-            // Cancellation won the race with failure.
-        }
-        catch (Exception failException)
-        {
-            _logger.LogError(
-                failException,
-                "Failed to mark run {RunId} as failed.",
-                runId);
-        }
+        return await _db.GetNextAvailableAtAsync(conn, queue, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()

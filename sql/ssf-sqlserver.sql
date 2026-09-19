@@ -671,6 +671,20 @@ BEGIN
 END;
 GO
 
+CREATE OR ALTER PROCEDURE ssf.get_next_available_at
+    @p_queue_name VARCHAR(57)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT TOP 1 available_at
+    FROM ssf.runs
+    WHERE queue_name = @p_queue_name
+      AND state IN ('pending', 'sleeping')
+    ORDER BY available_at ASC;
+END;
+GO
+
 CREATE OR ALTER PROCEDURE ssf.get_task_checkpoint_states
     @p_queue_name NVARCHAR(57),
     @p_task_id UNIQUEIDENTIFIER,

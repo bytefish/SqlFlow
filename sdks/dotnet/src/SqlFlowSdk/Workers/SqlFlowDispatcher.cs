@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.Logging;
+﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+using Microsoft.Extensions.Logging;
 using SqlFlowSdk.Core;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
@@ -124,9 +126,38 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
             {
                 if (!queueMayContainWork)
                 {
+                    TimeSpan delay = _signalOptions.ReconciliationInterval;
+
+                    try
+                    {
+                        // Get the next available time for the queue from the database
+                        DateTimeOffset? nextAvailableAt = await _client.GetNextAvailableAtAsync(options.Queue, cancellationToken).ConfigureAwait(false);
+
+                        // Calculate the time until the next job is available
+                        if (nextAvailableAt.HasValue)
+                        {
+                            TimeSpan timeUntilNextJob = nextAvailableAt.Value - DateTimeOffset.UtcNow;
+                            if (timeUntilNextJob < TimeSpan.Zero)
+                            {
+                                timeUntilNextJob = TimeSpan.Zero;
+                            }
+
+                            // Use the smaller of the two delays (next job or reconciliation interval)
+                            if (timeUntilNextJob < delay)
+                            {
+                                delay = timeUntilNextJob;
+                            }
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex, "Failed to retrieve next available time for queue '{Queue}'. Falling back to default reconciliation interval.", options.Queue);
+                    }
+
+                    // Reseliently wait for either a signal or the calculated delay, whichever comes first
                     await _signals.WaitAsync(
                             options.Queue,
-                            _signalOptions.ReconciliationInterval,
+                            delay,
                             cancellationToken)
                         .ConfigureAwait(false);
 
@@ -156,12 +187,11 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
                         if (!lease.IsAcquired)
                         {
                             availableCapacity.Release(reservedSlots);
-
                             continue;
                         }
                     }
 
-                    IReadOnlyList <ClaimedTask> tasks =
+                    IReadOnlyList<ClaimedTask> tasks =
                         (await _client.ClaimTasksAsync(
                                 options.Queue,
                                 options.WorkerId,
@@ -171,8 +201,7 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
                             .ConfigureAwait(false))
                         .ToList();
 
-                    int unusedSlots =
-                        reservedSlots - tasks.Count;
+                    int unusedSlots = reservedSlots - tasks.Count;
 
                     if (unusedSlots > 0)
                     {
@@ -190,7 +219,7 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
                         submittedTasks++;
                     }
 
-                    // No task was found. Wait for NOTIFY or reconciliation.
+                    // No task was found. Wait for NOTIFY or smart polling reconciliation.
                     if (tasks.Count == 0)
                     {
                         queueMayContainWork = false;
@@ -203,13 +232,11 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
                 }
                 catch
                 {
-                    int slotsNotSubmitted =
-                        reservedSlots - submittedTasks;
+                    int slotsNotSubmitted = reservedSlots - submittedTasks;
 
                     if (slotsNotSubmitted > 0)
                     {
-                        availableCapacity.Release(
-                            slotsNotSubmitted);
+                        availableCapacity.Release(slotsNotSubmitted);
                     }
 
                     throw;
@@ -223,7 +250,6 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
             catch (Exception exception)
             {
                 ReportError(options, exception);
-
                 queueMayContainWork = false;
             }
         }
@@ -364,7 +390,6 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
             throw new ArgumentOutOfRangeException(
                 nameof(options.ClaimTimeout),
                 "ClaimTimeout must be greater than zero.");
-
         }
 
         if (options.MaxTasksPerSecond.HasValue && options.MaxTasksPerSecond is <= 0)

@@ -201,4 +201,13 @@ public interface ISqlFlowDatabase
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The number of records deleted.</returns>
     Task<int> CleanupEventsAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retrieves the next available time for a task in the queue, which can be used to determine when the next task can be claimed or processed.
+    /// </summary>
+    /// <param name="conn">The database connection to use.</param>
+    /// <param name="queue">The name of the queue.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The next available time for a task in the queue.</returns>
+    Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string queue, CancellationToken cancellationToken);
 }

@@ -269,6 +269,21 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         }, cancellationToken);
     }
 
+    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string queue, CancellationToken cancellationToken)
+    {
+        using SqlCommand cmd = new("ssf.get_next_available_at", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
+
+        AddParam(cmd, "@p_queue_name", queue);
+
+        object? result = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+
+        if (result != null && result != DBNull.Value)
+        {
+            return (DateTimeOffset)result;
+        }
+
+        return null;
+    }
 
     public async Task ReleaseWorkerClaimsAsync(DbConnection conn, string queue, string workerId, CancellationToken cancellationToken)
     {

@@ -1234,7 +1234,6 @@ BEGIN
 END;
 $$;
 
-
 CREATE OR REPLACE FUNCTION ssf.cleanup_events(
     p_queue_name TEXT,
     p_ttl_seconds INT,
@@ -1271,6 +1270,27 @@ BEGIN
     SELECT count(*) INTO v_deleted_count FROM del;
 
     RETURN QUERY SELECT v_deleted_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION ssf.get_next_available_at(
+    p_queue_name TEXT
+)
+RETURNS TIMESTAMPTZ
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_next_available TIMESTAMPTZ;
+BEGIN
+    SELECT available_at
+    INTO v_next_available
+    FROM ssf.runs
+    WHERE queue_name = p_queue_name
+      AND state IN ('pending', 'sleeping')
+    ORDER BY available_at ASC
+    LIMIT 1;
+
+    RETURN v_next_available;
 END;
 $$;
 
