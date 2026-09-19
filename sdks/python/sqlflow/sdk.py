@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -136,6 +137,11 @@ class DatabaseDriver(ABC):
         """CALL ssf.cancel_task(p_queue_name TEXT, p_task_id UUID)"""
         pass
         
+    @abstractmethod
+    async def get_next_available_at(self, p_queue_name: str) -> Optional[datetime]:
+        """SELECT ssf.get_next_available_at(p_queue_name TEXT)"""
+        pass
+
     @abstractmethod
     def create_queue_signal_listener(self) -> QueueSignalListener:
         pass
@@ -330,8 +336,8 @@ class Worker:
         Main worker loop.
 
         Instead of polling on a fixed interval, the worker waits for a
-        queue wake-up signal. A reconciliation timeout ensures that lost
-        notifications do not permanently stall processing.
+        queue wake-up signal. A smart polling reconciliation timeout ensures
+        we wake up exactly when the next scheduled task is due.
 
         Rate limiting is applied before claiming tasks so that tasks are
         not unnecessarily held by claim leases.
@@ -344,16 +350,42 @@ class Worker:
         while self._is_running:
             try:
                 #
-                # If the previous claim returned no work, wait for either:
-                #
-                #  1. LISTEN / NOTIFY signal
-                #  2. reconciliation timeout
+                # If the previous claim returned no work, wait for either
+                # the notification signal, the exact time the next task
+                # is scheduled, or the default fallback interval.
                 #
                 if not queue_may_contain_work:
-                    await self._signals.wait_for_signal(
-                        self._options.queue_name,
-                        reconciliation_timeout
-                    )
+                    delay = reconciliation_timeout
+                    skip_wait = False
+
+                    try:
+                        next_available_at = await self._db.get_next_available_at(
+                            p_queue_name=self._options.queue_name
+                        )
+
+                        if next_available_at is not None:
+                            if next_available_at.tzinfo is None:
+                                next_available_at = next_available_at.replace(tzinfo=timezone.utc)
+                                
+                            time_until_next_job = (next_available_at - datetime.now(timezone.utc)).total_seconds()
+
+                            if time_until_next_job <= 0:
+                                skip_wait = True
+                            elif time_until_next_job < delay:
+                                delay = time_until_next_job
+
+                    except Exception as ex:
+                        logger.warning(
+                            "Failed to retrieve next available time for queue '%s'. Falling back to default reconciliation interval.",
+                            self._options.queue_name,
+                            exc_info=ex
+                        )
+
+                    if not skip_wait and delay > 0:
+                        await self._signals.wait_for_signal(
+                            self._options.queue_name,
+                            delay
+                        )
 
                     queue_may_contain_work = True
 

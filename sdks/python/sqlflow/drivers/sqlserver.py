@@ -15,7 +15,6 @@ logger = logging.getLogger("sqlflow.sqlserver")
 
 import asyncio
 from typing import Dict
-import aioodbc
 
 class SqlServerQueueSignalListener(QueueSignalListener):
     def __init__(
@@ -328,6 +327,17 @@ class SqlServerDriver(DatabaseDriver):
                     "{CALL ssf.cancel_task (?, ?)}",
                     (p_queue_name, str(p_task_id))
                 )
+
+    async def get_next_available_at(self, p_queue_name: str) -> Optional[datetime]:
+        pool = self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT ssf.get_next_available_at(?)",
+                    (p_queue_name,)
+                )
+                row = await cur.fetchone()
+                return row[0] if row else None
                 
     async def create_queue_signal_listener(self) -> QueueSignalListener:
 

@@ -33,13 +33,6 @@ class PostgresQueueSignalListener(QueueSignalListener):
 
         self._queues = {}
 
-    async def start(self):
-        self._connection = (
-            await asyncpg.connect(
-                self._connection_string
-            )
-        )
-
     async def register_queue(
         self,
         queue_name: str
@@ -221,7 +214,7 @@ class PostgresDriver(DatabaseDriver):
         return dict(row)
 
     async def emit_event(self, p_queue_name: str, p_event_name: str, p_payload: Any) -> None:
-        pool = self._ensure_pool()           
+        pool = self._ensure_pool()            
         await pool.execute(
             "CALL ssf.emit_event($1, $2, $3::jsonb)",
             p_queue_name, p_event_name, p_payload
@@ -234,6 +227,14 @@ class PostgresDriver(DatabaseDriver):
             p_queue_name, p_task_id
         )
             
+    async def get_next_available_at(self, p_queue_name: str) -> Optional[datetime]:
+        pool = self._ensure_pool()
+        row = await pool.fetchrow(
+            "SELECT ssf.get_next_available_at($1)",
+            p_queue_name
+        )
+        return row[0] if row else None
+
     async def create_queue_signal_listener(self) -> QueueSignalListener:
 
         if self._listener is not None:
