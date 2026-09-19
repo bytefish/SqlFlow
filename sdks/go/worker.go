@@ -6,19 +6,19 @@ import (
 	"errors"
 	"log"
 	"time"
-    "golang.org/x/time/rate"
+	"golang.org/x/time/rate"
 )
 
 type Handler func(ctx *TaskContext) error
 
 type Worker struct {
-	Options  WorkerOptions
-	DB       Driver
-	Registry map[string]Handler
-	semaphore chan struct{}
-	cancel    context.CancelFunc
+	Options     WorkerOptions
+	DB          Driver
+	Registry    map[string]Handler
+	semaphore   chan struct{}
+	cancel      context.CancelFunc
 	rateLimiter *rate.Limiter
-	signals QueueSignalListener
+	signals     QueueSignalListener
 }
 
 type QueueSignalListener interface {
@@ -115,20 +115,42 @@ func (w *Worker) pollLoop(
 		}
 
 		if !queueMayContainWork {
+			delay := reconciliationInterval
+			skipWait := false
 
-			_, err := w.signals.WaitForSignal(ctx, w.Options.QueueName, reconciliationInterval)
+			nextAvailableAt, err := w.DB.GetNextAvailableAt(ctx, w.Options.QueueName)
 
 			if err != nil {
+				log.Printf(
+					"[WARN] Failed to retrieve next available time: %v",
+					err,
+				)
+			} else if nextAvailableAt != nil {
+				
+				timeUntilNextJob := time.Until(*nextAvailableAt)
 
-				if ctx.Err() != nil {
-					return
+				if timeUntilNextJob <= 0 {
+					skipWait = true
+				} else if timeUntilNextJob < delay {
+					delay = timeUntilNextJob
 				}
+			}
 
-				log.Printf("[ERROR] Signal wait failed: %v", err)
+			if !skipWait && delay > 0 {
+				_, err := w.signals.WaitForSignal(ctx, w.Options.QueueName, delay)
 
-				time.Sleep(time.Second)
+				if err != nil {
 
-				continue
+					if ctx.Err() != nil {
+						return
+					}
+
+					log.Printf("[ERROR] Signal wait failed: %v", err)
+
+					time.Sleep(time.Second)
+
+					continue
+				}
 			}
 
 			queueMayContainWork = true
@@ -203,7 +225,7 @@ func (w *Worker) pollLoop(
 			go func() {
 
 				defer func() {
-					<- w.semaphore
+					<-w.semaphore
 				}()
 
 				w.processTask(
@@ -221,7 +243,6 @@ func (w *Worker) pollLoop(
 }
 
 func (w *Worker) processTask(ctx context.Context, task ClaimedTask) {
-	defer func() { <-w.semaphore }() // Always release the semaphore slot at the end
 
 	handler, exists := w.Registry[task.TaskName]
 	if !exists {

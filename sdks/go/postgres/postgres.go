@@ -148,6 +148,21 @@ func (p *PostgresDriver) CancelTask(ctx context.Context, queueName string, taskI
 	return err
 }
 
+func (p *PostgresDriver) GetNextAvailableAt(ctx context.Context, queueName string) (*time.Time, error) {
+	var nextAvailableAt *time.Time
+	
+	err := p.pool.QueryRow(
+		ctx,
+		"SELECT ssf.get_next_available_at($1)",
+		queueName,
+	).Scan(&nextAvailableAt)
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	return nextAvailableAt, nil
+}
 
 type PostgresQueueSignalListener struct {
 	connString string
