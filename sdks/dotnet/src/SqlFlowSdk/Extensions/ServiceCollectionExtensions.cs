@@ -17,7 +17,7 @@ public sealed class SqlFlowServiceBuilder
             ?? throw new ArgumentNullException(nameof(services));
     }
 
-    internal IServiceCollection Services { get; }
+    public IServiceCollection Services { get; }
 
     /// <summary>
     /// Adds a worker for the specified queue.
