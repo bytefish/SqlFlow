@@ -40,29 +40,23 @@ public static class PostgresServiceCollectionExtensions
     /// Adds the PostgreSQL SqlFlow provider using a connection string.
     /// </summary>
     public static SqlFlowServiceBuilder AddSqlFlowPostgres(
-        this IServiceCollection services,
-        string connectionString,
-        Action<QueueSignalOptions>? configureSignals = null)
+            this IServiceCollection services,
+            string connectionString,
+            Action<QueueSignalOptions>? configureSignals = null)
     {
         ArgumentNullException.ThrowIfNull(services);
-        ArgumentException.ThrowIfNullOrWhiteSpace(
-            connectionString);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
-        ConfigureSignalOptions(
-            services,
-            configureSignals);
+        ConfigureSignalOptions(services, configureSignals);
 
         services.TryAddSingleton(_ =>
         {
             var builder = new NpgsqlDataSourceBuilder(connectionString);
-
             return builder.Build();
         });
 
         services.TryAddSingleton<DbDataSource>(
-            serviceProvider =>
-                serviceProvider.GetRequiredService<
-                    NpgsqlDataSource>());
+            serviceProvider => serviceProvider.GetRequiredService<NpgsqlDataSource>());
 
         AddPostgresServices(services);
 
@@ -102,93 +96,69 @@ public static class PostgresServiceCollectionExtensions
 
         return new SqlFlowServiceBuilder(services);
     }
-
-    private static void AddPostgresServices(
-        IServiceCollection services)
+    private static void AddPostgresServices(IServiceCollection services)
     {
-        /*
-         * Shared SDK infrastructure:
-         *
-         * - ISqlFlowDispatcher
-         * - SqlFlowRegistry
-         * - IJobPublisher
-         * - QueueSignalOptions
-         */
         services.AddRequiredServices();
 
-        /*
-         * Main SqlFlow client.
-         */
         services.TryAddSingleton<ISqlFlow, SqlFlow>();
 
-        /*
-         * PostgreSQL database implementation.
-         */
-        services.Replace(
-            ServiceDescriptor.Singleton<
-                ISqlFlowDatabase,
-                PostgresFlowDatabase>());
+        services.Replace(ServiceDescriptor.Singleton<ISqlFlowDatabase, PostgresFlowDatabase>());
 
-        /*
-         * PostgreSQL LISTEN / NOTIFY implementation.
-         */
-        services.TryAddSingleton<
-            PostgresQueueSignalListener>();
+        services.TryAddSingleton<PostgresQueueSignalListener>();
 
-        /*
-         * IQueueSignalListener resolves to the exact same singleton
-         * as PostgresQueueSignalListener.
-         */
         services.Replace(
             ServiceDescriptor.Singleton<IQueueSignalListener>(
-                serviceProvider =>
-                    serviceProvider.GetRequiredService<
-                        PostgresQueueSignalListener>()));
+                serviceProvider => serviceProvider.GetRequiredService<PostgresQueueSignalListener>()));
 
         AddListenerHostedService(services);
     }
 
-    private static void ConfigureSignalOptions(
-        IServiceCollection services,
-        Action<QueueSignalOptions>? configureSignals)
+    private static void ConfigureSignalOptions(IServiceCollection services, Action<QueueSignalOptions>? configureSignals)
     {
         services.AddOptions<QueueSignalOptions>();
-
         if (configureSignals is not null)
         {
             services.Configure(configureSignals);
         }
     }
 
-    private static void AddListenerHostedService(
-        IServiceCollection services)
+    private static void AddListenerHostedService(IServiceCollection services)
     {
-        /*
-         * Prevent duplicate hosted-service registration if the provider
-         * method is accidentally called more than once.
-         */
-        if (services.Any(
-                descriptor =>
-                    descriptor.ServiceType ==
-                    typeof(
-                        PostgresQueueSignalListenerRegistrationMarker)))
+        if (services.Any(descriptor => descriptor.ServiceType == typeof(PostgresQueueSignalListenerRegistrationMarker)))
         {
             return;
         }
 
-        services.AddSingleton<
-            PostgresQueueSignalListenerRegistrationMarker>();
+        services.AddSingleton<PostgresQueueSignalListenerRegistrationMarker>();
 
         /*
-         * This is the same singleton that is registered as
-         * IQueueSignalListener.
+         * THE FIX:
+         * We conditionally return the Postgres listener ONLY if it wasn't replaced by NATS.
          */
-        services.AddSingleton<IHostedService>(
-            serviceProvider =>
-                serviceProvider.GetRequiredService<
-                    PostgresQueueSignalListener>());
+        services.AddSingleton<IHostedService>(serviceProvider =>
+        {
+            var activeListener = serviceProvider.GetRequiredService<IQueueSignalListener>();
+
+            if (activeListener is PostgresQueueSignalListener pgListener)
+            {
+                return pgListener;
+            }
+
+            // NATS (or another provider) took over. Return a dummy service so we 
+            // don't waste a database connection running an unused Postgres LISTEN loop.
+            return new NoOpHostedService();
+        });
     }
 
-    private sealed class
-        PostgresQueueSignalListenerRegistrationMarker;
+    private sealed class PostgresQueueSignalListenerRegistrationMarker;
+
+    /// <summary>
+    /// A dummy service that does nothing, used to gracefully cancel out 
+    /// the Postgres background loop when another signaling provider is active.
+    /// </summary>
+    private sealed class NoOpHostedService : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
 }
