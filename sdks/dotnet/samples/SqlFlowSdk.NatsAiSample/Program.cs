@@ -1,63 +1,41 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-
 using Microsoft.AspNetCore.Mvc;
 using SqlFlowSdk;
-using SqlFlowSdk.AiSample;
-using SqlFlowSdk.AiSample.Docker;
+using SqlFlowSdk.AiSample; // Reusing jobs from original sample
 using SqlFlowSdk.AiSample.Models;
 using SqlFlowSdk.AiSample.Services;
 using SqlFlowSdk.Core;
-using SqlFlowSdk.Management.AspNetCore;
-using SqlFlowSdk.Management.Postgres;
 using SqlFlowSdk.Postgres;
+using SqlFlowSdk.Nats;
+using SqlFlowSdk.NatsAiSample.Docker;
 
 var builder = WebApplication.CreateBuilder(args);
 
-
-// Start Docker Containers for dependencies
+// Start both Postgres and NATS containers
 await DockerContainers.StartAllContainersAsync();
+string pgConnectionString = DockerContainers.PostgresContainer.GetConnectionString();
+string natsUrl = DockerContainers.GetNatsUrl();
 
-string connectionString = DockerContainers.PostgresContainer.GetConnectionString();
-
-// Add Configuration
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
 
-// Add Logging
 builder.Services.AddLogging(loggingBuilder => loggingBuilder.AddConsole());
 
-// Add Cors
-const string CorsPolicyName = "FrontendCorsPolicy";
-
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
-
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy(CorsPolicyName, policy =>
-    {
-        policy
-            .WithOrigins(allowedOrigins)
-            .AllowAnyHeader()
-            .AllowAnyMethod();
-    });
-});
-
-// Add Services
+// Re-register the original sample services
 builder.Services.AddSingleton<ILlmService, LlmService>();
 builder.Services.AddSingleton<IGitHubService, GitHubService>();
 builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationService>();
 
-// Configure Workers and Jobs. In this example, we have a queue for AI agents that process tasks related to bug fixing. The
-// worker is configured to handle one task at a time and poll for new tasks every second. The job "solve-bug" is defined
-// with a maximum of 3 attempts for each task.
+// Configure SqlFlow: Postgres as Source of Truth, NATS as the Wake-Up Signal
 builder.Services
-    .AddSqlFlowPostgres(connectionString)
+    .AddSqlFlowPostgres(pgConnectionString)
+    .AddNatsSignaling(natsUrl) // Silently overrides Postgres LISTEN/NOTIFY
     .AddWorker("ai-agent-queue", worker =>
     {
         worker
             .SetConcurrency(1)
+            // Fallback smart-polling interval if NATS is ever temporarily unavailable
             .SetPollInterval(1);
 
         worker.AddJob<AutonomousAgentJob, AgentTask, AgentResult>("solve-bug", options =>
@@ -66,24 +44,10 @@ builder.Services
         });
     });
 
-// Register the SqlFlow SDK
-builder.Services.AddSqlFlowQueryApi(connectionString);
-builder.Services.AddSqlFlowAdminApi(connectionString);
-
 var app = builder.Build();
 
-app.UseCors(CorsPolicyName);
-
-// Map the SqlFlow Management endpoints for observing, analyzing and managing the workflow system. This
-// provides a web interface to view the status of tasks, queues, and other relevant information about the
-// workflow system.
-app
-    .MapSqlFlowQueryEndpoints()
-    .MapSqlFlowAdminEndpoints();
-
-// A Webhook triggers the Agent, such as a new JIRA ticket or GitHub issue
 app.MapPost("/agent/start", async (
-    [FromServices] ISqlFlow client, 
+    [FromServices] ISqlFlow client,
     [FromBody] AgentTask task,
     CancellationToken ct) =>
 {
@@ -92,10 +56,9 @@ app.MapPost("/agent/start", async (
         Queue = "ai-agent-queue"
     }, "solve-bug", task, ct);
 
-    return Results.Ok(new { RunId = result.RunId, TaskId = result.TaskId, Status = $"Agent dispatched to fix Isse #{task.IssueId}" });
+    return Results.Ok(new { RunId = result.RunId, TaskId = result.TaskId, Status = $"Agent dispatched to fix Issue #{task.IssueId}" });
 });
 
-// A Lead-Developer clicks on "Approve" or "Reject", with Feeedback
 app.MapPost("/agent/review/{issueId}/{correlationId}", async (
     [FromServices] IEventPublisher publisher,
     [FromRoute] string issueId,
@@ -103,7 +66,6 @@ app.MapPost("/agent/review/{issueId}/{correlationId}", async (
     [FromBody] HumanApproval approval,
     CancellationToken ct) =>
 {
-    // Wake up the agent, that is working on the ticket
     await publisher.EmitEventAsync(queue: "ai-agent-queue", eventName: $"agent-approval:{issueId}:{correlationId}", payload: approval, ct);
 
     string message = approval.Approved
