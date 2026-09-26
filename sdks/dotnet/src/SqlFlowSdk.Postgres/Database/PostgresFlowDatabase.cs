@@ -327,14 +327,13 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
     public async Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string queue, CancellationToken cancellationToken)
     {
-        using DbCommand cmd = conn.CreateCommand();
-        cmd.CommandText = "ssf.get_next_available_at";
-        cmd.CommandType = CommandType.StoredProcedure;
+        string sql = "SELECT ssf.get_next_available_at(@p_queue_name)"; ;
 
-        var param = cmd.CreateParameter();
-        param.ParameterName = "p_queue_name";
-        param.Value = queue;
-        cmd.Parameters.Add(param);
+        await using NpgsqlCommand cmd = CreateCommand(conn, sql);
+
+        cmd.CommandType = CommandType.Text;
+
+        AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
 
         object? result = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
 

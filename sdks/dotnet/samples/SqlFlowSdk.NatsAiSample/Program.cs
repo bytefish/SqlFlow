@@ -47,14 +47,11 @@ builder.Services
 var app = builder.Build();
 
 app.MapPost("/agent/start", async (
-    [FromServices] ISqlFlow client,
+    [FromServices] IJobPublisher jobPublisher, // <-- Inject IJobPublisher instead of ISqlFlow
     [FromBody] AgentTask task,
     CancellationToken ct) =>
 {
-    var result = await client.SpawnAsync(new SpawnOptions
-    {
-        Queue = "ai-agent-queue"
-    }, "solve-bug", task, ct);
+    var result = await jobPublisher.PublishAsync<AutonomousAgentJob, AgentTask>("solve-bug", task, ct);
 
     return Results.Ok(new { RunId = result.RunId, TaskId = result.TaskId, Status = $"Agent dispatched to fix Issue #{task.IssueId}" });
 });
