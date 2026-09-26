@@ -28,8 +28,6 @@ Before diving into how the system operates, it helps to understand the vocabular
 * **Suspension & Events:** Workflows often need to wait for external input (e.g., a human approving a document). Instead of blocking a server thread in a `while` loop, workflows `AwaitEvent`. This permanently saves the state to the database, unloads the workflow from memory, and frees up the worker thread until the external system fires the expected event.
 * **Signaling:** In SqlFlow, a "Signal" is just a lightweight wake-up call (a ping). **It contains no task data.** It simply tells idle background workers: *"Wake up, the database state has changed, go look for work."*
 
----
-
 ## How SqlFlow Works (The Big Picture)
 
 At its core, SqlFlow solves the problem of long-running, brittle application logic. If a server crashes while waiting for an API call, local memory is lost. SqlFlow fixes this by separating the **Storage** (the source of truth) from the **Signaling** (the control plane).
@@ -65,8 +63,6 @@ SqlFlow handles time natively in the database. If you schedule a task for tomorr
 
 Workers simply ignore these rows until the time arrives. Because workers utilize a smart-polling fallback, if they are asleep, they will naturally wake up at intervals to check if any scheduled tasks have become due, ensuring reliable execution without constant database hammering.
 
----
-
 ## What Does It Look Like in Code?
 
 Instead of writing complex state machines or infinite `while` loops, you write standard, sequential code. You simply wrap fragile operations in a `Step` and replace blocking waits with `AwaitEvent`. 
@@ -100,8 +96,6 @@ public async Task<Result> ExecuteAsync(TaskContext ctx, Order order)
 * If the server crashes during `_stripe.ChargeAsync()`, the workflow automatically restarts. 
 * If it crashes *after*, SqlFlow skips the Stripe call on reboot and loads the payment result directly from the database. 
 * When `AwaitEvent` is called, the state is serialized to the database and the application uses zero CPU/RAM until the `"manager-approval"` event is fired.
-
----
 
 ## Getting Started
 
