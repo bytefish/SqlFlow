@@ -16,7 +16,7 @@ While SqlFlow took a large deal of inspiration from Absurd, it expands significa
 
 * A much simpler database model optimized for high throughput.
 * First-class support for both **PostgreSQL** and **SQL Server**.
-* An advanced **Signaling Layer** featuring native database events and **NATS JetStream** support, eliminating polling bottlenecks and allowing infinite horizontal scaling in distributed systems.
+* An advanced **Signaling Layer** featuring native database events and **NATS JetStream** support, eliminating polling bottlenecks and allowing horizontal scaling in distributed systems.
 * Native SDKs for **.NET, Java, Python, and Go**.
 
 SqlFlow also comes with a Management API and a Control Panel to understand your system's health, monitor task processing, debug slow tasks, inspect event blockades, and search for specific executions.
