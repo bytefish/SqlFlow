@@ -2,17 +2,26 @@
 
 SqlFlow is a simple durable execution workflow system for PostgreSQL and SQL Server. It handles scheduling, state checkpointing, and retries without needing heavy external workflow engines like Temporal or Cadence.
 
-The SQL Scripts for creating the SqlFlow Database Schema are available here:
-* [PostgreSQL: `sql/ssf-postgres.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-postgres.sql)
-* [SQL Server: `sql/ssf-sqlserver.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-sqlserver.sql)
+The SQL Scripts for creating the SqlFlow Database Schema for Postgres:
+
+* [PostgreSQL: `sql/ssf-postgres-minimal.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-postgres-minimal.sql)
+* [PostgreSQL (LISTEN/NOTIFY): `sql/ssf-postgres-signaling.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-postgres-signaling.sql)
+
+The SQL Scripts for creating the SqlFlow Database Schema for SQL Server:
+
+* [SQL Server: `sql/ssf-sqlserver-minimal.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-sqlserver-minimal.sql)
+* [SQL Server (Service Broker): `sql/ssf-sqlserver-signaling.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-sqlserver-signaling.sql)
 
 While SqlFlow took a large deal of inspiration from Absurd, it expands significantly on the core concepts to deliver a production-ready, multi-language ecosystem. It features:
+
 * A much simpler database model optimized for high throughput.
 * First-class support for both **PostgreSQL** and **SQL Server**.
 * An advanced **Signaling Layer** featuring native database events and **NATS JetStream** support, eliminating polling bottlenecks and allowing infinite horizontal scaling in distributed systems.
 * Native SDKs for **.NET, Java, Python, and Go**.
 
 SqlFlow also comes with a Management API and a Control Panel to understand your system's health, monitor task processing, debug slow tasks, inspect event blockades, and search for specific executions.
+
+Please note, that there's also NATS support for signaling!
 
 ## Core Concepts & Terminology
 
