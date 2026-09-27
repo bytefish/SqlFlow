@@ -133,29 +133,40 @@ public static class DockerContainers
             .ExecuteNonQueryAsync()
             .ConfigureAwait(false);
     }
-
     private static async Task InstallSchemaAsync()
     {
-        string scriptPath = Path.Combine(
+        string minimalScriptPath = Path.Combine(
             AppContext.BaseDirectory,
-            "Resources",
-            "sql",
-            "ssf-sqlserver.sql");
+            ".. / .. / .. / .. / sql",
+            "ssf-sqlserver-minimal.sql");
 
-        string scriptContent =
-            await File.ReadAllTextAsync(scriptPath)
+        string extensionsScriptPath = Path.Combine(
+            AppContext.BaseDirectory,
+            ".. / .. / .. / .. / sql",
+            "ssf-sqlserver-extensions.sql");
+
+        string minimalScriptContent =
+            await File.ReadAllTextAsync(minimalScriptPath)
+                .ConfigureAwait(false);
+
+        string extensionsScriptContent =
+            await File.ReadAllTextAsync(extensionsScriptPath)
                 .ConfigureAwait(false);
 
         /*
          * ExecScriptAsync normally uses the container's default connection,
-         * which targets master. Prefix the script so that all schema objects
-         * are installed in SqlFlowTests.
+         * which targets master. Prefix the scripts so that all schema objects
+         * are installed in SqlFlowTests, executing the minimal script first
+         * followed by the extensions script.
          */
         string databaseScript = $$"""
             USE [{{DatabaseName}}];
             GO
 
-            {{scriptContent}}
+            {{minimalScriptContent}}
+            GO
+
+            {{extensionsScriptContent}}
             """;
 
         var result = await SqlServerContainer

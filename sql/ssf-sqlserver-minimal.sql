@@ -13,6 +13,20 @@ BEGIN
 END
 GO
 
+-- ==========================================
+-- FUNCTIONS & HELPERS
+-- ==========================================
+CREATE OR ALTER PROCEDURE ssf.notify_workers
+    @p_queue_name NVARCHAR(57),
+    @p_event NVARCHAR(50) = 'event'
+AS
+BEGIN
+    SET NOCOUNT ON;
+    -- No-op in the minimal version. 
+    -- The signaling functionality (Service Broker) is added in ssf-sqlserver-extensions.sql
+END;
+GO
+
 CREATE OR ALTER FUNCTION ssf.current_time_fn()
 RETURNS DATETIMEOFFSET
 AS
@@ -48,6 +62,9 @@ BEGIN
 END;
 GO
 
+-- ==========================================
+-- STATIC TABLE DEFINITIONS
+-- ==========================================
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'queues' AND schema_id = SCHEMA_ID('ssf'))
 BEGIN
     CREATE TABLE ssf.queues (
@@ -181,49 +198,9 @@ BEGIN
 END
 GO
 
-IF NOT EXISTS (SELECT 1 FROM sys.service_message_types WHERE name = 'ssf_NotificationMessage')
-BEGIN
-    CREATE MESSAGE TYPE [ssf_NotificationMessage] VALIDATION = NONE;
-END
-GO
-
-IF NOT EXISTS (SELECT 1 FROM sys.service_contracts WHERE name = 'ssf_NotificationContract')
-BEGIN
-    CREATE CONTRACT [ssf_NotificationContract] ([ssf_NotificationMessage] SENT BY INITIATOR);
-END
-GO
-
-IF NOT EXISTS (SELECT 1 FROM sys.service_queues WHERE name = 'NotificationQueue' AND schema_id = SCHEMA_ID('ssf'))
-BEGIN
-    CREATE QUEUE ssf.NotificationQueue;
-END
-GO
-
-IF NOT EXISTS (SELECT 1 FROM sys.services WHERE name = 'ssf_NotificationService')
-BEGIN
-    CREATE SERVICE [ssf_NotificationService] ON QUEUE ssf.NotificationQueue ([ssf_NotificationContract]);
-END
-GO
-
-CREATE OR ALTER PROCEDURE ssf.notify_workers
-    @p_queue_name NVARCHAR(57),
-    @p_event NVARCHAR(50) = 'event'
-AS
-BEGIN
-    SET NOCOUNT ON;
-    DECLARE @dlg UNIQUEIDENTIFIER;
-    DECLARE @msg NVARCHAR(MAX) = N'{"queue":"' + @p_queue_name + N'","event":"' + @p_event + N'"}';
-
-    BEGIN DIALOG @dlg
-        FROM SERVICE [ssf_NotificationService]
-        TO SERVICE 'ssf_NotificationService'
-        ON CONTRACT [ssf_NotificationContract]
-        WITH ENCRYPTION = OFF;
-
-    SEND ON CONVERSATION @dlg MESSAGE TYPE [ssf_NotificationMessage] (@msg);
-    END CONVERSATION @dlg;
-END;
-GO
+-- ==========================================
+-- STORED PROCEDURES
+-- ==========================================
 
 CREATE OR ALTER PROCEDURE ssf.create_queue
     @p_queue_name NVARCHAR(MAX),

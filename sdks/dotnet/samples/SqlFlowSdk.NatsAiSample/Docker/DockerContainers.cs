@@ -8,7 +8,7 @@ namespace SqlFlowSdk.NatsAiSample.Docker;
 public static class DockerContainers
 {
     public static PostgreSqlContainer PostgresContainer = new PostgreSqlBuilder("postgres:18")
-        .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "../../../../sql/ssf-postgres.sql"), "/docker-entrypoint-initdb.d/1-ssf-postgres.sql")
+        .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "../../../../sql/ssf-postgres-minimal.sql"), "/docker-entrypoint-initdb.d/1-ssf-postgres-minimal.sql")
         .WithUsername("postgres")
         .WithPassword("password")
         .Build();
