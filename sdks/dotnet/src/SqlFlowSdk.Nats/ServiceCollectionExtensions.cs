@@ -3,6 +3,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using NATS.Client.Core;
 using NATS.Client.JetStream;
 using NATS.Net;
@@ -90,6 +91,14 @@ public static class NatsServiceCollectionExtensions
          * Register the NATS listener implementation.
          */
         services.TryAddSingleton<NatsQueueSignalListener>();
+
+        /*
+         * Register the NATS Event Publisher implementation.
+         */
+        services.Replace(ServiceDescriptor.Transient<IEventPublisher>(serviceProvider => new NatsEventPublisher(
+            new SqlFlowEventPublisher(serviceProvider.GetRequiredService<ISqlFlow>()),
+            serviceProvider.GetRequiredService<INatsJSContext>(),
+            serviceProvider.GetRequiredService<ILogger<NatsEventPublisher>>())));
 
         /*
          * Replace IQueueSignalListener to resolve to the NATS listener

@@ -12,11 +12,7 @@ While SqlFlow took a large deal of inspiration from Absurd, it expands significa
 * An advanced **Signaling Layer** featuring native database events and **NATS JetStream** support, eliminating polling bottlenecks and allowing infinite horizontal scaling in distributed systems.
 * Native SDKs for **.NET, Java, Python, and Go**.
 
-SqlFlow also comes with a Management API and a Control Panel to understand your system's health, monitor task processing, debug slow tasks, inspect event blockades, and search for specific executions:
-
-<a href="https://raw.githubusercontent.com/bytefish/SqlFlow/main/docs/control-panel-event-blockades.jpg">
-    <img src="https://raw.githubusercontent.com/bytefish/SqlFlow/main/docs/control-panel-event-blockades.jpg" alt="Screenshot of Event Blockades within the SqlFlow System" width="100%" />
-</a>
+SqlFlow also comes with a Management API and a Control Panel to understand your system's health, monitor task processing, debug slow tasks, inspect event blockades, and search for specific executions.
 
 ## Core Concepts & Terminology
 
@@ -32,7 +28,7 @@ Before diving into how the system operates, it helps to understand the vocabular
 
 At its core, SqlFlow solves the problem of long-running, brittle application logic. If a server crashes while waiting for an API call, local memory is lost. SqlFlow fixes this by separating the **Storage** (the source of truth) from the **Signaling** (the control plane).
 
-Here is how the architecture elegantly fits together from start to finish:
+Here is how the architecture fits together from start to finish:
 
 ### 1. Spawning and Dispatching
 When your application triggers a new workflow (spawns a Task), two things happen instantly:
@@ -105,3 +101,9 @@ Choose your preferred language to see how to install the SDK and build a real-wo
 * [Java SDK Tutorial](docs/java.md)
 * [Python SDK Tutorial](docs/python.md)
 * [Go SDK Tutorial](docs/go.md)
+
+## HTTP Requests
+
+A tutorial on how to send HTTP requests for the examples is available at:
+
+* [AI Agent HTTP Requests](docs/agent-http-requests.md)
