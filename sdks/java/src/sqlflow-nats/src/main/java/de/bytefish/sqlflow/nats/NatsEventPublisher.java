@@ -1,0 +1,4 @@
+package de.bytefish.sqlflow.nats;
+
+public class NatsEventPublisher {
+}
