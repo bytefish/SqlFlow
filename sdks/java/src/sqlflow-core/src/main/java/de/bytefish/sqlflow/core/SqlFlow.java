@@ -1,13 +1,11 @@
 package de.bytefish.sqlflow.core;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import de.bytefish.sqlflow.core.db.SqlFlowDatabase;
+import de.bytefish.sqlflow.core.infrastructure.*;
 import de.bytefish.sqlflow.core.exceptions.CancelledTaskException;
 import de.bytefish.sqlflow.core.exceptions.SuspendTaskException;
-import de.bytefish.sqlflow.core.infrastructure.TaskContext;
-import de.bytefish.sqlflow.core.infrastructure.TaskHandler;
 import de.bytefish.sqlflow.core.models.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,12 +29,26 @@ public class SqlFlow implements ISqlFlow {
     private final SqlFlowDatabase db;
     private final ObjectMapper mapper;
 
+    private final IEventPublisher eventPublisher;
+    private final IJobPublisher jobPublisher;
+
     // Internal registry holding the functional execution wrappers
     private final Map<String, TaskHandler> taskHandlers = new ConcurrentHashMap<>();
 
+    // Standard constructor using default database publishers
     public SqlFlow(SqlFlowDatabase db, ObjectMapper mapper) {
         this.db = db;
         this.mapper = mapper;
+        this.eventPublisher = new EventPublisher(db, mapper);
+        this.jobPublisher = new JobPublisher(db, mapper);
+    }
+
+    // DI-friendly constructor allowing decorated publishers (like NatsEventPublisher)
+    public SqlFlow(SqlFlowDatabase db, ObjectMapper mapper, IEventPublisher eventPublisher, IJobPublisher jobPublisher) {
+        this.db = db;
+        this.mapper = mapper;
+        this.eventPublisher = eventPublisher;
+        this.jobPublisher = jobPublisher;
     }
 
     @Override
@@ -64,26 +76,12 @@ public class SqlFlow implements ISqlFlow {
 
     @Override
     public <TRequest> SpawnResult spawn(SpawnOptions options, String taskName, TRequest request) {
-        try {
-            String paramsJson = mapper.writeValueAsString(request);
-            String optionsJson = mapper.writeValueAsString(options);
-            return db.spawnTask(options.queue(), taskName, paramsJson, optionsJson);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize spawn request", e);
-        }
+        return jobPublisher.spawn(options, taskName, request);
     }
 
     @Override
     public void emitEvent(EmitEventOptions options, String eventName, Object payload) {
-        if (eventName == null || eventName.isEmpty()) {
-            throw new IllegalArgumentException("eventName required");
-        }
-        try {
-            String payloadJson = mapper.writeValueAsString(payload);
-            db.emitEvent(options.queue(), eventName, payloadJson);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize event payload", e);
-        }
+        eventPublisher.emitEvent(options.queue(), eventName, payload);
     }
 
     @Override
@@ -181,6 +179,7 @@ public class SqlFlow implements ISqlFlow {
             }
         }
     }
+
     @Override
     public OffsetDateTime getNextAvailableAt(String queue) {
         if (queue == null || queue.trim().isEmpty()) {

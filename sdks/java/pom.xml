@@ -34,6 +34,7 @@
         <module>src/sqlflow-core</module>
         <module>src/sqlflow-postgres</module>
         <module>src/sqlflow-sqlserver</module>
+        <module>src/sqlflow-nats</module>
     </modules>
 
     <properties>

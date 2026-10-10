@@ -4,11 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import de.bytefish.sqlflow.core.db.SqlFlowDatabase;
 
-public class DefaultEventPublisher implements IEventPublisher {
+public class EventPublisher implements IEventPublisher {
     private final SqlFlowDatabase db;
     private final ObjectMapper mapper;
 
-    public DefaultEventPublisher(SqlFlowDatabase db, ObjectMapper mapper) {
+    public EventPublisher(SqlFlowDatabase db, ObjectMapper mapper) {
         this.db = db;
         this.mapper = mapper;
     }
