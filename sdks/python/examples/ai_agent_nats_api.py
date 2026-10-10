@@ -17,7 +17,7 @@ from sqlflow import (
     EmitEventOptions
 )
 from sqlflow.drivers.postgres import PostgresDriver
-from sqlflow.signaling.nats_signaling import NatsDatabaseDriverDecorator
+from sqlflow.drivers.nats import NatsDatabaseDriverDecorator
 
 # Models
 

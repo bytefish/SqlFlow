@@ -145,6 +145,23 @@ files = [
 ]
 
 [[package]]
+name = "nats-py"
+version = "2.16.0"
+description = "NATS client for Python"
+optional = false
+python-versions = ">=3.7"
+groups = ["main"]
+files = [
+    {file = "nats_py-2.16.0-py3-none-any.whl", hash = "sha256:aeb1ff123966c05833d26c7df7e1d54c1c6d32b612428b21677a2e921f1fecae"},
+    {file = "nats_py-2.16.0.tar.gz", hash = "sha256:1d137ed7afc9b59033b3199324c6237df2016a5091935871344a787eba6b72fc"},
+]
+
+[package.extras]
+aiohttp = ["aiohttp"]
+fast-parse = ["fast-mail-parser"]
+nkeys = ["nkeys"]
+
+[[package]]
 name = "packaging"
 version = "26.3"
 description = "Core utilities for Python packages"
@@ -531,11 +548,12 @@ files = [
 typing-extensions = ">=4.12.0"
 
 [extras]
-all = ["aioodbc", "asyncpg"]
+all = ["aioodbc", "asyncpg", "nats-py"]
+nats = ["nats-py"]
 postgres = ["asyncpg"]
 sqlserver = ["aioodbc"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "0b7d294ac90c13be5729b107c0997816cc00cef72c9fbc2af85d9fc0344079ec"
+content-hash = "0bd62d8a8bce222d241a07f665765e50bb5f6c4ddb5c8c1df03b5cf5656ff725"

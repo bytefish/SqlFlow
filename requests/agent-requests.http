@@ -16,9 +16,11 @@ Content-Type: application/json
         body = JSON.parse(body);
     }
 
+    const taskId = body.taskId ?? body.task_id;
+    
     client.test("Agent was started", function () {
         client.assert(response.status === 200, "Expected HTTP 200");
-        client.assert(body.taskId, "Response does not contain taskId");
+        client.assert(body.taskId, "Response does not contain taskId or task_id");
     });
 
     client.global.set("taskId", body.taskId);
