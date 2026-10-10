@@ -20,3 +20,10 @@ The Packages are released by:
 
 ## Java
 
+There is a GitHub Action "Maven Central Deploy":
+
+* https://github.com/bytefish/SqlFlow/actions/workflows/publish-packages.yml
+
+It's run explicitly by clicking `Run Workflow -> Branch main -> Run Workflow`
+
+It automatically releases the Java library and its modules to the Maven Central repositories.
