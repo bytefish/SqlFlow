@@ -312,13 +312,15 @@ public class PostgresFlowDatabase implements SqlFlowDatabase {
     @Override
     public Integer cleanupTasks(String queue, int ttlSeconds, int limit) {
         return execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("SELECT deleted_tasks FROM ssf.cleanup_tasks(?, ?, ?)")) {
+            try (PreparedStatement cmd = conn.prepareStatement(
+                    "SELECT deleted_tasks FROM ssf.cleanup_tasks(?, ?, ?)"
+            )) {
                 cmd.setString(1, queue);
                 cmd.setInt(2, ttlSeconds);
                 cmd.setInt(3, limit);
+
                 try (ResultSet rs = cmd.executeQuery()) {
-                    if (rs.next()) return rs.getInt(1);
-                    return 0;
+                    return rs.next() ? rs.getInt("deleted_tasks") : 0;
                 }
             }
         });
@@ -326,7 +328,26 @@ public class PostgresFlowDatabase implements SqlFlowDatabase {
 
     @Override
     public Integer cleanupEvents(String queue, int ttlSeconds, int limit) {
-        return cleanupTasks(queue, ttlSeconds, limit);
+        return execute(conn -> {
+            String sql = """
+                SELECT deleted_events
+                FROM ssf.cleanup_events(?, ?, ?)
+                """;
+
+            try (PreparedStatement cmd = conn.prepareStatement(sql)) {
+                cmd.setString(1, queue);
+                cmd.setInt(2, ttlSeconds);
+                cmd.setInt(3, limit);
+
+                try (ResultSet rs = cmd.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getInt("deleted_events");
+                    }
+
+                    return 0;
+                }
+            }
+        });
     }
 
     private JsonNode parseJson(ResultSet rs, int ordinal) throws SQLException {

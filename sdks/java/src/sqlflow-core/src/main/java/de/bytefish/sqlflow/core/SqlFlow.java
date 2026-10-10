@@ -13,10 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 
 /**
  * The core implementation of the ISqlFlow interface.
@@ -76,11 +73,13 @@ public class SqlFlow implements ISqlFlow {
 
     @Override
     public <TRequest> SpawnResult spawn(SpawnOptions options, String taskName, TRequest request) {
+        // Delegates to the injected publisher (Native DB or NATS Decorator)
         return jobPublisher.spawn(options, taskName, request);
     }
 
     @Override
     public void emitEvent(EmitEventOptions options, String eventName, Object payload) {
+        // Delegates to the injected publisher (Native DB or NATS Decorator)
         eventPublisher.emitEvent(options.queue(), eventName, payload);
     }
 
@@ -104,78 +103,183 @@ public class SqlFlow implements ISqlFlow {
             executeTask(task, queue, claimTimeout, true);
         }
     }
-
     @Override
-    public void executeTask(ClaimedTask task, String queue, int claimTimeout, boolean fatalOnLeaseTimeout) {
+    public void executeTask(
+            ClaimedTask task,
+            String queue,
+            int claimTimeout,
+            boolean fatalOnLeaseTimeout) {
+
         TaskHandler handler = taskHandlers.get(task.taskName());
 
         if (handler == null) {
-            logger.error("No handler registered for task: {}", task.taskName());
+            logger.error(
+                    "No handler registered for task: {}",
+                    task.taskName()
+            );
+
             try {
                 ObjectNode errNode = mapper.createObjectNode();
-                errNode.put("error", "Unknown task: " + task.taskName());
-                db.failRun(queue, task.runId(), mapper.writeValueAsString(errNode));
+                errNode.put(
+                        "error",
+                        "Unknown task: " + task.taskName()
+                );
+
+                db.failRun(
+                        queue,
+                        task.runId(),
+                        mapper.writeValueAsString(errNode)
+                );
             } catch (Exception ex) {
                 // Ignore
             }
+
             return;
         }
 
-        TaskContext ctx = TaskContext.create(logger, task.taskId(), db, queue, task, claimTimeout);
+        TaskContext ctx = TaskContext.create(
+                logger,
+                task.taskId(),
+                db,
+                queue,
+                task,
+                claimTimeout
+        );
 
         try {
-            // Emulating C#'s Task.WhenAny using CompletableFuture for lease timeouts
-            CompletableFuture<Object> handlerFuture = CompletableFuture.supplyAsync(() -> {
-                try {
-                    return handler.handle(ctx, task.params());
-                } catch (RuntimeException e) {
-                    throw e; // Propagate directly
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            });
+            CompletableFuture<Object> handlerFuture =
+                    CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return handler.handle(
+                                    ctx,
+                                    task.params()
+                            );
+                        } catch (RuntimeException ex) {
+                            throw ex;
+                        } catch (Exception ex) {
+                            throw new RuntimeException(ex);
+                        }
+                    });
 
             Object result;
+
             if (fatalOnLeaseTimeout) {
-                // If it takes longer than 2x claimTimeout, we force a fatal cancellation.
-                result = handlerFuture.get(claimTimeout * 2L, TimeUnit.SECONDS);
+                result = handlerFuture.get(
+                        claimTimeout * 2L,
+                        TimeUnit.SECONDS
+                );
             } else {
                 result = handlerFuture.join();
             }
 
-            String resultJson = mapper.writeValueAsString(result);
-            db.completeRun(queue, task.runId(), resultJson);
+            String resultJson =
+                    mapper.writeValueAsString(result);
 
+            db.completeRun(
+                    queue,
+                    task.runId(),
+                    resultJson
+            );
         } catch (Exception ex) {
+            /*
+             * Search the complete cause chain for expected
+             * control-flow exceptions. CompletableFuture may wrap
+             * these in ExecutionException or CompletionException.
+             */
+            Throwable current = ex;
+            Throwable controlFlowCause = null;
+
+            while (current != null) {
+                if (current instanceof SuspendTaskException
+                        || current instanceof CancelledTaskException) {
+                    controlFlowCause = current;
+                    break;
+                }
+
+                current = current.getCause();
+            }
+
+            if (controlFlowCause != null) {
+                logger.debug(
+                        "Task control flow detected: taskId={}, runId={}, exception={}",
+                        task.taskId(),
+                        task.runId(),
+                        controlFlowCause.getClass().getName()
+                );
+
+                /*
+                 * Do not call completeRun() or failRun().
+                 *
+                 * For SuspendTaskException, awaitEvent() has already
+                 * changed the run and task to sleeping in the database.
+                 */
+                return;
+            }
+
+            /*
+             * Unwrap the standard CompletableFuture wrappers for
+             * accurate logging and failure persistence.
+             */
             Throwable cause = ex;
-            if (ex instanceof java.util.concurrent.ExecutionException && ex.getCause() != null) {
+
+            if ((ex instanceof ExecutionException || ex instanceof CompletionException)
+                    && ex.getCause() != null) {
                 cause = ex.getCause();
             }
 
-            if (cause instanceof SuspendTaskException || cause instanceof CancelledTaskException) {
-                return; // Expected control-flow exception (suspending thread)
-            }
-
             if (cause instanceof TimeoutException) {
-                logger.error("Task {} ({}) exceeded claim timeout by 2x.", task.taskName(), task.taskId());
-                throw new RuntimeException("FatalLeaseTimeoutException", cause);
+                logger.error(
+                        "Task {} ({}) exceeded claim timeout by 2x.",
+                        task.taskName(),
+                        task.taskId()
+                );
+
+                throw new RuntimeException(
+                        "FatalLeaseTimeoutException",
+                        cause
+                );
             }
 
-            logger.error("[ssf] task execution failed: {}", cause.getMessage());
+            logger.error(
+                    "[ssf] task execution failed: {}",
+                    cause.getMessage()
+            );
+
             try {
                 ObjectNode errorNode = mapper.createObjectNode();
-                errorNode.put("name", cause.getClass().getSimpleName());
-                errorNode.put("message", cause.getMessage());
+
+                errorNode.put(
+                        "name",
+                        cause.getClass().getSimpleName()
+                );
+
+                errorNode.put(
+                        "message",
+                        cause.getMessage()
+                );
 
                 StringBuilder stack = new StringBuilder();
-                for(StackTraceElement el : cause.getStackTrace()) {
-                    stack.append(el.toString()).append("\n");
-                }
-                errorNode.put("stack", stack.toString());
 
-                db.failRun(queue, task.runId(), mapper.writeValueAsString(errorNode));
-            } catch (Exception failErr) {
-                logger.error("Failed to mark run as failed: {}", failErr.getMessage());
+                for (StackTraceElement element : cause.getStackTrace()) {
+                    stack.append(element)
+                            .append("\n");
+                }
+
+                errorNode.put(
+                        "stack",
+                        stack.toString()
+                );
+
+                db.failRun(
+                        queue,
+                        task.runId(),
+                        mapper.writeValueAsString(errorNode)
+                );
+            } catch (Exception failError) {
+                logger.error(
+                        "Failed to mark run as failed: {}",
+                        failError.getMessage()
+                );
             }
         }
     }
