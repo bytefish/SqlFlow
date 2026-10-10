@@ -3,29 +3,116 @@ name: Maven Central Deploy
 on:
   workflow_dispatch:
 
+env:
+  MAVEN_VERSION: "3.9.11"
+  MAVEN_HOME: "${{ github.workspace }}/.tools/apache-maven-3.9.11"
+
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          java-version: "21"
+          distribution: temurin
           cache: maven
           server-id: central
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
-          
+
+      - name: Install Apache Maven 3.9.11
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MAVEN_BASE_URL="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}"
+          MAVEN_ARCHIVE="apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+
+          mkdir -p "${GITHUB_WORKSPACE}/.tools"
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 3 \
+            --output "${RUNNER_TEMP}/${MAVEN_ARCHIVE}" \
+            "${MAVEN_BASE_URL}/${MAVEN_ARCHIVE}"
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 3 \
+            --output "${RUNNER_TEMP}/${MAVEN_ARCHIVE}.sha512" \
+            "${MAVEN_BASE_URL}/${MAVEN_ARCHIVE}.sha512"
+
+          cd "${RUNNER_TEMP}"
+
+          echo "$(cat "${MAVEN_ARCHIVE}.sha512")  ${MAVEN_ARCHIVE}" \
+            | sha512sum --check -
+
+          tar \
+            --extract \
+            --gzip \
+            --file "${MAVEN_ARCHIVE}" \
+            --directory "${GITHUB_WORKSPACE}/.tools"
+
+          echo "MAVEN_HOME=${MAVEN_HOME}" >> "${GITHUB_ENV}"
+          echo "${MAVEN_HOME}/bin" >> "${GITHUB_PATH}"
+
+      - name: Verify build tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          java -version
+          mvn --version
+
+          ACTUAL_MAVEN_VERSION="$(
+            mvn --version \
+              | sed -n 's/^Apache Maven \([^ ]*\).*$/\1/p' \
+              | head -n 1
+          )"
+
+          if [ "${ACTUAL_MAVEN_VERSION}" != "${MAVEN_VERSION}" ]; then
+            echo "Expected Maven ${MAVEN_VERSION}, got ${ACTUAL_MAVEN_VERSION}" >&2
+            exit 1
+          fi
+
       - name: Build and publish with Maven
-        run: mvn --batch-mode clean deploy -Prelease -DskipTests=true --file sdks/java/pom.xml -s .github/workflows/maven-settings.xml
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mvn \
+            --batch-mode \
+            --no-transfer-progress \
+            clean deploy \
+            -Prelease \
+            -DskipTests=true \
+            --file sdks/java/pom.xml \
+            --settings .github/workflows/maven-settings.xml
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
           MAVEN_GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Upload Central bundle for diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-central-publishing-diagnostics
+          path: |
+            sdks/java/target/central-publishing/**
+            sdks/java/target/central-staging/**
+          if-no-files-found: ignore
