@@ -1,5 +1,7 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+using System.Text.Json.Serialization;
+
 namespace SqlFlowSdk.Core;
 
 /// <summary>
@@ -12,5 +14,6 @@ public class EmitEventOptions
     /// on for this event. The event will be delivered to all handlers that are registered to listen for 
     /// it on the specified queue.
     /// </summary>
+    [JsonPropertyName("queue")]
     public required string Queue { get; set; }
 }

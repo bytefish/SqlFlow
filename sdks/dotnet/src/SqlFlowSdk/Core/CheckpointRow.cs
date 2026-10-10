@@ -1,6 +1,7 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace SqlFlowSdk.Core;
 
@@ -15,12 +16,14 @@ public class CheckpointRow
     /// Name of the checkpoint. This is used to identify different checkpoints within the same task and run. It must be 
     /// unique for each checkpoint within the same task and run, but can be reused across different tasks and runs.
     /// </summary>
+    [JsonPropertyName("checkpoint_name")]
     public required string CheckpointName { get; set; }
 
     /// <summary>
     /// State of the checkpoint. This is an arbitrary JSON node that can be used to store any information relevant 
     /// to the checkpoint.
     /// </summary>
+    [JsonPropertyName("state")]
     public JsonNode? State { get; set; }
 
     /// <summary>
@@ -28,6 +31,7 @@ public class CheckpointRow
     /// "completed", "failed", etc. The specific values and their meanings are determined by the application using the 
     /// system.
     /// </summary>
+    [JsonPropertyName("status")]
     public required string Status { get; set; }
 
     /// <summary>
@@ -35,6 +39,7 @@ public class CheckpointRow
     /// only one run can update the checkpoint at a time, and to manage checkpoint leases. When a run claims a checkpoint, 
     /// it becomes the owner of that checkpoint until it releases it or until the lease expires.
     /// </summary>
+    [JsonPropertyName("owner_run_id")]
     public string? OwnerRunId { get; set; }
 
     /// <summary>
@@ -42,5 +47,6 @@ public class CheckpointRow
     /// checkpoint should be considered expired. If a checkpoint has an owner and the current time exceeds the last 
     /// updated time plus the lease duration, the checkpoint is considered expired.
     /// </summary>
+    [JsonPropertyName("updated_at")]
     public DateTime UpdatedAt { get; set; }
 }

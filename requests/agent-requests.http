@@ -20,11 +20,11 @@ Content-Type: application/json
     
     client.test("Agent was started", function () {
         client.assert(response.status === 200, "Expected HTTP 200");
-        client.assert(body.taskId, "Response does not contain taskId or task_id");
+        client.assert(taskId, "Response does not contain taskId or task_id");
     });
 
-    client.global.set("taskId", body.taskId);
-    client.log("Stored taskId: " + body.taskId);
+    client.global.set("taskId", taskId);
+    client.log("Stored taskId: " + taskId);
 %}
 
 ### Reject the first attempt after a delay

@@ -1,6 +1,7 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace SqlFlowSdk.Core;
 
@@ -16,27 +17,32 @@ public class SpawnOptions
     /// execute the task. It must match the queue specified in the RegisteredTask for the 
     /// task being spawned.
     /// </summary>
+    [JsonPropertyName("queue")]
     public required string Queue { get; set; }
 
     /// <summary>
     /// Maximum number of attempts for this task before it is considered failed. This overrides the default 
     /// value specified in the RegisteredTask for this task type.
     /// </summary>
+    [JsonPropertyName("max_attempts")]
     public int MaxAttempts { get; set; } = 5;
 
     /// <summary>
     /// Strategy for retrying this task if it fails. This can be used to implement exponential backoff, 
     /// fixed delays, or other retry strategies.
     /// </summary>
+    [JsonPropertyName("retry_strategy")]
     public RetryStrategy? RetryStrategy { get; set; }
 
     /// <summary>
     /// Headers to attach to this task. Headers are arbitrary key-value pairs that can be used to store.
     /// </summary>
+    [JsonPropertyName("headers")]
     public JsonObject? Headers { get; set; }
 
     /// <summary>
     /// Cancellation policy for this task. This determines when and how the task can be cancelled.
     /// </summary>
+    [JsonPropertyName("cancellation")]
     public CancellationPolicy? Cancellation { get; set; }
 }

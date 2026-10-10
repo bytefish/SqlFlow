@@ -1,5 +1,7 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+using System.Text.Json.Serialization;
+
 namespace SqlFlowSdk.Core;
 
 /// <summary>
@@ -13,6 +15,7 @@ public class SpawnResult
     /// task and manage its execution. It can be used to claim the task for execution, cancel the task, 
     /// or query its status.
     /// </summary>
+    [JsonPropertyName("task_id")]
     public required string TaskId { get; set; }
 
     /// <summary>
@@ -20,6 +23,7 @@ public class SpawnResult
     /// entire workflow or job that this task is a part of. It can be used to group related tasks together 
     /// and track their progress as a unit.
     /// </summary>
+    [JsonPropertyName("run_id")]
     public required string RunId { get; set; }
 
     /// <summary>
@@ -27,5 +31,6 @@ public class SpawnResult
     /// execution. For a newly spawned task, this will be 1. If the task fails and is retried, this 
     /// number will be incremented with each attempt.
     /// </summary>
+    [JsonPropertyName("attempt")]
     public int Attempt { get; set; }
 }

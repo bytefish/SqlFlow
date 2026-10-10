@@ -1,6 +1,7 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace SqlFlowSdk.Core;
 
@@ -18,18 +19,21 @@ public class ClaimedTask
     /// The ID of the run that this task belongs to. This is a unique identifier for the entire workflow or job that 
     /// this task is a part of. It can be used to group related tasks together and track their progress as a unit.
     /// </summary>
+    [JsonPropertyName("run_id")]
     public required string RunId { get; set; }
 
     /// <summary>
     /// The ID of the task. This is a unique identifier for this specific instance of the task. It can be used to track 
     /// the progress of this task, log its execution, and report its result.
     /// </summary>
+    [JsonPropertyName("task_id")]
     public required string TaskId { get; set; }
 
     /// <summary>
     /// Name of the task type. This is used to identify which handler should be invoked to execute this task. It must match 
     /// the name of a registered task handler in the SqlFlow system.
     /// </summary>
+    [JsonPropertyName("task_name")]
     public required string TaskName { get; set; }
 
     /// <summary>
@@ -37,30 +41,35 @@ public class ClaimedTask
     /// first time a task is executed, this will be 1. If the task fails and is retried, this number will be incremented 
     /// with each attempt.
     /// </summary>
+    [JsonPropertyName("attempt")]
     public int Attempt { get; set; }
 
     /// <summary>
     /// Parameters for this task. This is the data that was passed when the task was spawned. It can be any JSON-serializable 
     /// object, and it will be provided to the task handler when executing the task.
     /// </summary>
+    [JsonPropertyName("params")]
     public JsonNode? Params { get; set; }
 
     /// <summary>
     /// The Retry Strategy for this task. This defines how the SqlFlow system should handle retries if this task fails. It 
     /// can specify the number of retry attempts, the delay between retries, and any backoff strategy to use.
     /// </summary>
+    [JsonPropertyName("retry_strategy")]
     public JsonNode? RetryStrategy { get; set; }
 
     /// <summary>
     /// Maximum number of attempts for this task before it is considered failed. This is used by the SqlFlow system to 
     /// determine when to stop retrying a task that keeps failing.
     /// </summary>
+    [JsonPropertyName("max_attempts")]
     public int? MaxAttempts { get; set; }
 
     /// <summary>
     /// Headers to attach to this task. Headers are arbitrary key-value pairs that can be used to store additional metadata about the
     /// task. 
     /// </summary>
+    [JsonPropertyName("headers")]
     public JsonObject? Headers { get; set; }
 
     /// <summary>
@@ -68,10 +77,12 @@ public class ClaimedTask
     /// any tasks that are waiting for this event will be woken up and allowed to proceed. This can be used to create dependencies 
     /// between tasks and control the flow of execution in a workflow.
     /// </summary>
+    [JsonPropertyName("wake_event")]
     public string? WakeEvent { get; set; }
 
     /// <summary>
     /// The Event Payload is the data that will be emitted along with the wake event when this task is completed.
     /// </summary>
+    [JsonPropertyName("event_payload")]
     public JsonNode? EventPayload { get; set; }
 }

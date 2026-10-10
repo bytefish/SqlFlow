@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/bytefish/SqlFlow/sdks/go"
-	"github.com/bytefish/SqlFlow/sdks/go/postgres"
+	"github.com/bytefish/SqlFlow/sdks/go/drivers/postgres"
 )
 
 // Models

@@ -58,6 +58,7 @@ type WorkerOptions struct {
 	WorkerID     string
 	QueueName    string
 	BatchSize int
+    ClaimTimeoutInSeconds int   
 	Concurrency  int
     MaxTasksPerSecond int
     RateLimitBurstSize int

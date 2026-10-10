@@ -1,5 +1,7 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+using System.Text.Json.Serialization;
+
 namespace SqlFlowSdk.Core;
 
 /// <summary>
@@ -13,11 +15,13 @@ public class TaskRegistrationOptions
     /// Name of the task type. This is used to identify the task when spawning and executing tasks. It must be 
     /// unique across all registered tasks. When you spawn a task, you specify the name of
     /// </summary>
+    [JsonPropertyName("name")]
     public required string Name { get; set; }
 
     /// <summary>
     /// Default Number of attempts for this task before it is considered failed.
     /// </summary>
+    [JsonPropertyName("default_max_attempts")]
     public int DefaultMaxAttempts { get; set; } = 5;
 
     /// <summary>
@@ -25,5 +29,6 @@ public class TaskRegistrationOptions
     /// a task can be cancelled. It can be overridden on a per-task basis when spawning, but this provides 
     /// a default value for convenience.
     /// </summary>
+    [JsonPropertyName("default_cancellation")]
     public CancellationPolicy? DefaultCancellation { get; set; }
 }

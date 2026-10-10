@@ -181,7 +181,6 @@ func (p *PostgresDriver) GetNextAvailableAt(ctx context.Context, queueName strin
 	return nextAvailableAt, nil
 }
 
-
 type PostgresQueueSignalListener struct {
 	connString string
 
@@ -326,10 +325,12 @@ func (p *PostgresQueueSignalListener) Start(
 	return nil
 }
 
-func (p *PostgresQueueSignalListener) Close() {
+func (p *PostgresQueueSignalListener) Close() error {
 	if p.cancelCtx != nil {
 		p.cancelCtx()
 	}
+
+	return nil
 }
 
 func (p *PostgresQueueSignalListener) signalQueue(queueName string) {

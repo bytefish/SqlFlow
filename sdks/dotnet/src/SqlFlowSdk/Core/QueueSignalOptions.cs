@@ -1,4 +1,6 @@
-﻿namespace SqlFlowSdk.Core;
+﻿using System.Text.Json.Serialization;
+
+namespace SqlFlowSdk.Core;
 
 public sealed class QueueSignalOptions
 {
@@ -6,14 +8,14 @@ public sealed class QueueSignalOptions
     /// Maximum time between authoritative database inspections when no
     /// notification is received.
     /// </summary>
-    public TimeSpan ReconciliationInterval { get; init; } =
-        TimeSpan.FromSeconds(60);
+    [JsonPropertyName("reconciliation_interval")]
+    public TimeSpan ReconciliationInterval { get; init; } = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Delay before reconnecting after a listener connection failure.
     /// </summary>
-    public TimeSpan ReconnectDelay { get; init; } =
-        TimeSpan.FromSeconds(5);
+    [JsonPropertyName("reconnect_delay")]
+    public TimeSpan ReconnectDelay { get; init; } = TimeSpan.FromSeconds(5);
 
     public void Validate()
     {

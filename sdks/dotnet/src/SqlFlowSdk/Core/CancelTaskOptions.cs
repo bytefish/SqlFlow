@@ -1,5 +1,7 @@
 ﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+using System.Text.Json.Serialization;
+
 namespace SqlFlowSdk.Core;
 
 /// <summary>
@@ -11,5 +13,6 @@ public class CancelTaskOptions
     /// Queue that the task belongs to. This is required to identify which queue the task is in, so the system can locate and 
     /// cancel the correct task. The queue must match the one specified when the task was spawned.
     /// </summary>
+    [JsonPropertyName("queue")]
     public required string Queue { get; set; }
 }

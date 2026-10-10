@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"time"
+    "fmt"
 	"golang.org/x/time/rate"
 )
 
@@ -32,6 +33,8 @@ type QueueSignalListener interface {
 		queueName string,
 		timeout time.Duration,
 	) (bool, error)
+    
+	Close() error
 }
 
 func NewWorker(
@@ -56,6 +59,11 @@ func NewWorker(
 			burst,
 		)
 	}
+    
+    if opts.ClaimTimeoutInSeconds <= 0 {
+        opts.ClaimTimeoutInSeconds = 300
+    }
+
 
 	return &Worker{
 		Options:     opts,
@@ -70,24 +78,34 @@ func NewWorker(
 	}
 }
 
-func (w *Worker) Start(ctx context.Context) {
+func (w *Worker) Start(
+	ctx context.Context,
+) error {
 	workerCtx, cancel := context.WithCancel(ctx)
+
+	if err := w.signals.RegisterQueue(
+		workerCtx,
+		w.Options.QueueName,
+	); err != nil {
+		cancel()
+		return fmt.Errorf(
+			"register queue signaling for %q: %w",
+			w.Options.QueueName,
+			err,
+		)
+	}
 
 	w.cancel = cancel
 
-	err := w.signals.RegisterQueue(workerCtx, w.Options.QueueName)
-
-	if err != nil {
-		panic(err)
-	}
-
 	log.Printf(
-		"Worker %s started on queue '%s'",
+		"Worker %s started on queue %q",
 		w.Options.WorkerID,
 		w.Options.QueueName,
 	)
 
 	go w.pollLoop(workerCtx)
+
+	return nil
 }
 
 func (w *Worker) Stop() {
@@ -186,14 +204,13 @@ func (w *Worker) pollLoop(
 			}
 		}
 
-		tasks, err :=
-			w.DB.ClaimTask(
-				ctx,
-				w.Options.QueueName,
-				w.Options.WorkerID,
-				300,
-				claimQty,
-			)
+        tasks, err := w.DB.ClaimTask(
+            ctx,
+            w.Options.QueueName,
+            w.Options.WorkerID,
+            w.Options.ClaimTimeoutInSeconds,
+            claimQty,
+        )
 
 		if err != nil {
 
