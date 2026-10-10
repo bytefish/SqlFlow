@@ -2,7 +2,7 @@
 
 ## GO
 
-It's a manual Workflow with the following commands:
+It's a manual workflow with the following commands:
 
 ```
 git tag sdks/go/v1.4.0
@@ -27,3 +27,10 @@ There is a GitHub Action "Maven Central Deploy":
 It's run explicitly by clicking `Run Workflow -> Branch main -> Run Workflow`
 
 It automatically releases the Java library and its modules to the Maven Central repositories.
+
+## Python
+
+It's a manual workflow with the following commands
+
+1. In the `pyproject.toml` increase the `version`
+2. Run `poetry publish --build`
