@@ -31,6 +31,7 @@ type AwaitEventResult struct {
 }
 
 type SpawnOptions struct {
+	TenantID       string         `json:"tenant_id"`
 	QueueName      string         `json:"queue_name"`
 	MaxAttempts    *int           `json:"max_attempts,omitempty"`
 	Headers        map[string]any `json:"headers,omitempty"`
@@ -47,19 +48,22 @@ type SpawnResult struct {
 }
 
 type EmitEventOptions struct {
+	TenantID  string `json:"tenant_id"`
 	QueueName string `json:"queue_name"`
 }
 
 type CancelTaskOptions struct {
+	TenantID  string `json:"tenant_id"`
 	QueueName string `json:"queue_name"`
 }
 
 type WorkerOptions struct {
-	WorkerID     string
-	QueueName    string
-	BatchSize int
-    ClaimTimeoutInSeconds int   
-	Concurrency  int
-    MaxTasksPerSecond int
-    RateLimitBurstSize int
+	TenantID              string
+	WorkerID              string
+	QueueName             string
+	BatchSize             int
+	ClaimTimeoutInSeconds int
+	Concurrency           int
+	MaxTasksPerSecond     int
+	RateLimitBurstSize    int
 }

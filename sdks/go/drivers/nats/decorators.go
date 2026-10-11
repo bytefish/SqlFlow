@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	sqlflow "github.com/bytefish/SqlFlow/sdks/go"
 	natsgo "github.com/nats-io/nats.go"
@@ -92,6 +93,7 @@ func NewDriverDecorator(
 
 func (d *DriverDecorator) SpawnTask(
 	ctx context.Context,
+	tenantID string,
 	queueName string,
 	taskName string,
 	params []byte,
@@ -99,6 +101,7 @@ func (d *DriverDecorator) SpawnTask(
 ) (*sqlflow.SpawnResult, error) {
 	result, err := d.Driver.SpawnTask(
 		ctx,
+		tenantID,
 		queueName,
 		taskName,
 		params,
@@ -111,19 +114,11 @@ func (d *DriverDecorator) SpawnTask(
 	if result.Created {
 		if err := d.publishSignal(
 			ctx,
+			tenantID,
 			queueName,
 			"spawn",
 		); err != nil {
-			/*
-			 * The database transaction already succeeded.
-			 *
-			 * Do not report SpawnTask as failed because retrying the
-			 * operation could create another task unless idempotency
-			 * is configured.
-			 *
-			 * The worker's reconciliation interval remains the
-			 * fallback if signaling fails.
-			 */
+			// Do not report SpawnTask as failed.
 		}
 	}
 
@@ -132,12 +127,14 @@ func (d *DriverDecorator) SpawnTask(
 
 func (d *DriverDecorator) EmitEvent(
 	ctx context.Context,
+	tenantID string,
 	queueName string,
 	eventName string,
 	payload string,
 ) error {
 	err := d.Driver.EmitEvent(
 		ctx,
+		tenantID,
 		queueName,
 		eventName,
 		payload,
@@ -148,19 +145,55 @@ func (d *DriverDecorator) EmitEvent(
 
 	if err := d.publishSignal(
 		ctx,
+		tenantID,
 		queueName,
 		"event",
 	); err != nil {
-		/*
-		 * The event is already durable in PostgreSQL.
-		 *
-		 * Do not return an error that might cause callers to emit
-		 * the same logical event again. Reconciliation will wake
-		 * workers if the signal is lost.
-		 */
+		// Event is durable. Ignore signal failure.
 	}
 
 	return nil
+}
+
+// Pass-through functions for the new interface signatures:
+func (d *DriverDecorator) CreateQueue(ctx context.Context, tenantID string, queueName string, storageMode string) error {
+	return d.Driver.CreateQueue(ctx, tenantID, queueName, storageMode)
+}
+
+func (d *DriverDecorator) ClaimTask(ctx context.Context, tenantID string, queueName string, workerID string, claimTimeout int, qty int) ([]sqlflow.ClaimedTask, error) {
+	return d.Driver.ClaimTask(ctx, tenantID, queueName, workerID, claimTimeout, qty)
+}
+
+func (d *DriverDecorator) CompleteRun(ctx context.Context, tenantID string, queueName string, runID string, state string) error {
+	return d.Driver.CompleteRun(ctx, tenantID, queueName, runID, state)
+}
+
+func (d *DriverDecorator) ScheduleRun(ctx context.Context, tenantID string, queueName string, runID string, wakeAt time.Time) error {
+	return d.Driver.ScheduleRun(ctx, tenantID, queueName, runID, wakeAt)
+}
+
+func (d *DriverDecorator) FailRun(ctx context.Context, tenantID string, queueName string, runID string, reason string, retryAt time.Time) error {
+	return d.Driver.FailRun(ctx, tenantID, queueName, runID, reason, retryAt)
+}
+
+func (d *DriverDecorator) SetTaskCheckpointState(ctx context.Context, tenantID string, queueName string, taskID string, stepName string, state string, ownerRun string, extendClaimBy int) error {
+	return d.Driver.SetTaskCheckpointState(ctx, tenantID, queueName, taskID, stepName, state, ownerRun, extendClaimBy)
+}
+
+func (d *DriverDecorator) GetTaskCheckpointState(ctx context.Context, tenantID string, queueName string, taskID string, stepName string, includePending int) (*sqlflow.CheckpointState, error) {
+	return d.Driver.GetTaskCheckpointState(ctx, tenantID, queueName, taskID, stepName, includePending)
+}
+
+func (d *DriverDecorator) AwaitEvent(ctx context.Context, tenantID string, queueName string, taskID string, runID string, stepName string, eventName string, timeout *int) (*sqlflow.AwaitEventResult, error) {
+	return d.Driver.AwaitEvent(ctx, tenantID, queueName, taskID, runID, stepName, eventName, timeout)
+}
+
+func (d *DriverDecorator) CancelTask(ctx context.Context, tenantID string, queueName string, taskID string) error {
+	return d.Driver.CancelTask(ctx, tenantID, queueName, taskID)
+}
+
+func (d *DriverDecorator) GetNextAvailableAt(ctx context.Context, tenantID string, queueName string) (*time.Time, error) {
+	return d.Driver.GetNextAvailableAt(ctx, tenantID, queueName)
 }
 
 func (d *DriverDecorator) CreateQueueSignalListener(
@@ -186,13 +219,15 @@ func (d *DriverDecorator) CreateQueueSignalListener(
 
 func (d *DriverDecorator) publishSignal(
 	ctx context.Context,
+	tenantID string,
 	queueName string,
 	event string,
 ) error {
 	payload, err := json.Marshal(
 		signalMessage{
-			Queue: queueName,
-			Event: event,
+			TenantID: tenantID,
+			Queue:    queueName,
+			Event:    event,
 		},
 	)
 	if err != nil {
@@ -202,7 +237,7 @@ func (d *DriverDecorator) publishSignal(
 		)
 	}
 
-	subject := d.subjectForQueue(queueName)
+	subject := d.subjectForQueue(tenantID, queueName)
 
 	_, err = d.jetStream.Publish(
 		ctx,
@@ -221,14 +256,18 @@ func (d *DriverDecorator) publishSignal(
 }
 
 func (d *DriverDecorator) subjectForQueue(
+	tenantID string,
 	queueName string,
 ) string {
 	return d.subjectPrefix +
+		"." +
+		encodeQueueName(tenantID) +
 		"." +
 		encodeQueueName(queueName)
 }
 
 type signalMessage struct {
-	Queue string `json:"queue"`
-	Event string `json:"event"`
+	TenantID string `json:"tenant_id"`
+	Queue    string `json:"queue"`
+	Event    string `json:"event"`
 }

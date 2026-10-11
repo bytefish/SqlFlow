@@ -99,7 +99,7 @@ var gitHubService = &GitHubService{}
 var notificationService = &LocalNotificationService{}
 
 func autonomousAgentWorkflow(ctx *sqlflow.TaskContext, task AgentTask) error {
-	log.Printf("[Workflow] Agent starts investigation for ticket %s", task.IssueID)
+	log.Printf("[Workflow] Agent starts investigation for ticket %s (Tenant: %s)", task.IssueID, ctx.TenantID)
 
 	bugReport, err := sqlflow.Step(ctx, "fetch-issue-context", func() (Issue, error) {
 		return gitHubService.GetIssueDetails(task.IssueID), nil
@@ -138,7 +138,7 @@ func autonomousAgentWorkflow(ctx *sqlflow.TaskContext, task AgentTask) error {
 
 		approval, err := sqlflow.AwaitEvent[HumanApproval](
 			ctx,
-			fmt.Sprintf("agent-approval:%s:%s", task.IssueID, correlationID),
+			fmt.Sprintf("agent-approval:%s:%s:%s", ctx.TenantID, task.IssueID, correlationID),
 			fmt.Sprintf("wait-for-human-review-%d", attempt),
 			nil,
 		)
@@ -195,38 +195,44 @@ func main() {
 	defer dbDriver.Close()
 
 	sqlflowClient = sqlflow.NewClient(dbDriver)
-	_ = sqlflowClient.CreateQueue(ctx, "ai-agent-queue", "unpartitioned")
+	_ = sqlflowClient.CreateQueue(ctx, "tenant-alpha", "ai-agent-queue", "unpartitioned")
 
 	sqlflow.RegisterWorkflow(sqlflowClient, "solve-bug", autonomousAgentWorkflow)
 
-    worker, err := sqlflowClient.CreateWorker(
-        ctx,
-        sqlflow.WorkerOptions{
-            QueueName: "ai-agent-queue",
-            WorkerID:  "worker-1",
-            Concurrency: 5,
-            BatchSize:   5,
-        },
-    )
+	worker, err := sqlflowClient.CreateWorker(
+		ctx,
+		sqlflow.WorkerOptions{
+			TenantID:    "tenant-alpha",
+			QueueName:   "ai-agent-queue",
+			WorkerID:    "worker-1",
+			Concurrency: 5,
+			BatchSize:   5,
+		},
+	)
 
-    if err != nil {
-        panic(err)
-    }
-    
+	if err != nil {
+		panic(err)
+	}
+
 	worker.Start(ctx)
-	
+
 	log.Println("Background worker started.")
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /agent/start", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /agent/{tenant_id}/start", func(w http.ResponseWriter, r *http.Request) {
+		tenantID := r.PathValue("tenant_id")
+
 		var task AgentTask
 		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		options := sqlflow.SpawnOptions{QueueName: "ai-agent-queue"}
+		options := sqlflow.SpawnOptions{
+			TenantID:  tenantID,
+			QueueName: "ai-agent-queue",
+		}
 		res, err := sqlflowClient.Spawn(r.Context(), options, "solve-bug", task)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -237,11 +243,12 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]any{
 			"run_id":  res.RunID,
 			"task_id": res.TaskID,
-			"status":  fmt.Sprintf("Agent dispatched to fix Issue #%s", task.IssueID),
+			"status":  fmt.Sprintf("Agent dispatched to fix Issue #%s for tenant %s", task.IssueID, tenantID),
 		})
 	})
 
-	mux.HandleFunc("POST /agent/review/{issue_id}/{correlation_id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /agent/{tenant_id}/review/{issue_id}/{correlation_id}", func(w http.ResponseWriter, r *http.Request) {
+		tenantID := r.PathValue("tenant_id")
 		issueID := r.PathValue("issue_id")
 		correlationID := r.PathValue("correlation_id")
 
@@ -251,9 +258,12 @@ func main() {
 			return
 		}
 
-		eventName := fmt.Sprintf("agent-approval:%s:%s", issueID, correlationID)
-		options := sqlflow.EmitEventOptions{QueueName: "ai-agent-queue"}
-		
+		eventName := fmt.Sprintf("agent-approval:%s:%s:%s", tenantID, issueID, correlationID)
+		options := sqlflow.EmitEventOptions{
+			TenantID:  tenantID,
+			QueueName: "ai-agent-queue",
+		}
+
 		err := sqlflowClient.EmitEvent(r.Context(), options, eventName, approval)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -286,10 +296,10 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	
+
 	server.Shutdown(shutdownCtx)
 	worker.Stop()
 	time.Sleep(500 * time.Millisecond)
-	
+
 	log.Println("System shut down successfully.")
 }

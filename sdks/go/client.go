@@ -17,11 +17,11 @@ func NewClient(db Driver) *Client {
 	}
 }
 
-func (c *Client) CreateQueue(ctx context.Context, queueName string, storageMode string) error {
+func (c *Client) CreateQueue(ctx context.Context, tenantID string, queueName string, storageMode string) error {
 	if storageMode == "" {
 		storageMode = "unpartitioned"
 	}
-	return c.db.CreateQueue(ctx, queueName, storageMode)
+	return c.db.CreateQueue(ctx, tenantID, queueName, storageMode)
 }
 
 func (c *Client) Spawn(ctx context.Context, options SpawnOptions, taskName string, params any) (*SpawnResult, error) {
@@ -38,12 +38,11 @@ func (c *Client) Spawn(ctx context.Context, options SpawnOptions, taskName strin
 	}
 
 	optionsBytes, err := json.Marshal(options)
-
 	if err != nil {
 		return nil, err
 	}
 
-	return c.db.SpawnTask(ctx, options.QueueName, taskName, paramsBytes, optionsBytes)
+	return c.db.SpawnTask(ctx, options.TenantID, options.QueueName, taskName, paramsBytes, optionsBytes)
 }
 
 func (c *Client) EmitEvent(ctx context.Context, options EmitEventOptions, eventName string, payload any) error {
@@ -59,11 +58,11 @@ func (c *Client) EmitEvent(ctx context.Context, options EmitEventOptions, eventN
 		payloadBytes = []byte("{}")
 	}
 
-	return c.db.EmitEvent(ctx, options.QueueName, eventName, string(payloadBytes))
+	return c.db.EmitEvent(ctx, options.TenantID, options.QueueName, eventName, string(payloadBytes))
 }
 
 func (c *Client) CancelTask(ctx context.Context, options CancelTaskOptions, taskID string) error {
-	return c.db.CancelTask(ctx, options.QueueName, taskID)
+	return c.db.CancelTask(ctx, options.TenantID, options.QueueName, taskID)
 }
 
 func (c *Client) RegisterTask(taskName string, handler Handler) {
@@ -71,17 +70,16 @@ func (c *Client) RegisterTask(taskName string, handler Handler) {
 }
 
 func (c *Client) CreateWorker(
-    ctx context.Context,
-    opts WorkerOptions,
+	ctx context.Context,
+	opts WorkerOptions,
 ) (*Worker, error) {
 
-    signals, err := c.db.CreateQueueSignalListener(ctx)
+	signals, err := c.db.CreateQueueSignalListener(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-    if err != nil {
-        return nil, err
-    }
-
-    return NewWorker(opts, c.db, c.registry, signals), nil
+	return NewWorker(opts, c.db, c.registry, signals), nil
 }
 
 func RegisterWorkflow[T any](c *Client, taskName string, workflow func(ctx *TaskContext, params T) error) {
@@ -94,6 +92,6 @@ func RegisterWorkflow[T any](c *Client, taskName string, workflow func(ctx *Task
 		}
 		return workflow(ctx, params)
 	}
-	
+
 	c.registry[taskName] = handler
 }

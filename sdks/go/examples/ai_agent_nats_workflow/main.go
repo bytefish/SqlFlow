@@ -21,11 +21,11 @@ import (
 )
 
 const (
-	queueName        = "ai-agent-queue"
-	httpAddress      = ":8000"
-	defaultPostgres  = "postgres://postgres:password@127.0.0.1:5432/sqlflow_db"
-	defaultNATS      = "nats://127.0.0.1:4222"
-	shutdownTimeout  = 5 * time.Second
+	queueName       = "ai-agent-queue"
+	httpAddress     = ":8000"
+	defaultPostgres = "postgres://postgres:password@127.0.0.1:5432/sqlflow_db"
+	defaultNATS     = "nats://127.0.0.1:4222"
+	shutdownTimeout = 5 * time.Second
 )
 
 // Models
@@ -185,8 +185,9 @@ func autonomousAgentWorkflow(
 	task AgentTask,
 ) error {
 	log.Printf(
-		"[Workflow] Agent starts investigation for ticket %s",
+		"[Workflow] Agent starts investigation for ticket %s (Tenant: %s)",
 		task.IssueID,
+		ctx.TenantID,
 	)
 
 	bugReport, err := sqlflow.Step(
@@ -263,7 +264,8 @@ func autonomousAgentWorkflow(
 		approval, awaitErr := sqlflow.AwaitEvent[HumanApproval](
 			ctx,
 			fmt.Sprintf(
-				"agent-approval:%s:%s",
+				"agent-approval:%s:%s:%s",
+				ctx.TenantID,
 				task.IssueID,
 				correlationID,
 			),
@@ -393,8 +395,11 @@ func main() {
 
 	sqlflowClient := sqlflow.NewClient(decoratedDriver)
 
+	// In diesem Beispiel registrieren wir eine Queue für einen bestimmten Mandanten
+	// In echten Anwendungen würde dies vermutlich dynamisch oder außerhalb stattfinden.
 	if err := sqlflowClient.CreateQueue(
 		ctx,
+		"tenant-alpha",
 		queueName,
 		"unpartitioned",
 	); err != nil {
@@ -407,9 +412,11 @@ func main() {
 		autonomousAgentWorkflow,
 	)
 
+	// Worker für diesen spezifischen Tenant starten
 	worker, err := sqlflowClient.CreateWorker(
 		ctx,
 		sqlflow.WorkerOptions{
+			TenantID:    "tenant-alpha",
 			QueueName:   queueName,
 			WorkerID:    "agent-worker-1",
 			Concurrency: 5,
@@ -474,8 +481,10 @@ func createHTTPHandler(
 	mux := http.NewServeMux()
 
 	mux.HandleFunc(
-		"POST /agent/start",
+		"POST /agent/{tenant_id}/start",
 		func(w http.ResponseWriter, r *http.Request) {
+			tenantID := r.PathValue("tenant_id")
+
 			var task AgentTask
 			if err := decodeJSON(r, &task); err != nil {
 				writeError(w, http.StatusBadRequest, err)
@@ -493,7 +502,10 @@ func createHTTPHandler(
 
 			result, err := client.Spawn(
 				r.Context(),
-				sqlflow.SpawnOptions{QueueName: queueName},
+				sqlflow.SpawnOptions{
+					TenantID:  tenantID,
+					QueueName: queueName,
+				},
 				"solve-bug",
 				task,
 			)
@@ -509,8 +521,9 @@ func createHTTPHandler(
 					RunID:  result.RunID,
 					TaskID: result.TaskID,
 					Status: fmt.Sprintf(
-						"Agent dispatched to fix Issue #%s",
+						"Agent dispatched to fix Issue #%s for tenant %s",
 						task.IssueID,
+						tenantID,
 					),
 				},
 			)
@@ -518,8 +531,9 @@ func createHTTPHandler(
 	)
 
 	mux.HandleFunc(
-		"POST /agent/review/{issue_id}/{correlation_id}",
+		"POST /agent/{tenant_id}/review/{issue_id}/{correlation_id}",
 		func(w http.ResponseWriter, r *http.Request) {
+			tenantID := r.PathValue("tenant_id")
 			issueID := r.PathValue("issue_id")
 			correlationID := r.PathValue("correlation_id")
 
@@ -530,14 +544,18 @@ func createHTTPHandler(
 			}
 
 			eventName := fmt.Sprintf(
-				"agent-approval:%s:%s",
+				"agent-approval:%s:%s:%s",
+				tenantID,
 				issueID,
 				correlationID,
 			)
 
 			err := client.EmitEvent(
 				r.Context(),
-				sqlflow.EmitEventOptions{QueueName: queueName},
+				sqlflow.EmitEventOptions{
+					TenantID:  tenantID,
+					QueueName: queueName,
+				},
 				eventName,
 				approval,
 			)

@@ -54,11 +54,14 @@ func NewQueueSignalListener(
 
 func (l *QueueSignalListener) RegisterQueue(
 	ctx context.Context,
+	tenantID string,
 	queueName string,
 ) error {
-	if queueName == "" {
-		return errors.New("queue name must not be empty")
+	if tenantID == "" || queueName == "" {
+		return errors.New("tenantID and queueName must not be empty")
 	}
+
+	key := fmt.Sprintf("%s:%s", tenantID, queueName)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -69,12 +72,12 @@ func (l *QueueSignalListener) RegisterQueue(
 		)
 	}
 
-	if _, exists := l.queues[queueName]; exists {
+	if _, exists := l.queues[key]; exists {
 		return nil
 	}
 
-	subject := l.subjectForQueue(queueName)
-	durableName := durableNameForQueue(queueName)
+	subject := l.subjectForQueue(tenantID, queueName)
+	durableName := durableNameForQueue(tenantID, queueName)
 
 	consumer, err := l.jetStream.CreateOrUpdateConsumer(
 		ctx,
@@ -87,7 +90,8 @@ func (l *QueueSignalListener) RegisterQueue(
 	)
 	if err != nil {
 		return fmt.Errorf(
-			"create NATS consumer for queue %q: %w",
+			"create NATS consumer for tenant %q queue %q: %w",
+			tenantID,
 			queueName,
 			err,
 		)
@@ -98,9 +102,6 @@ func (l *QueueSignalListener) RegisterQueue(
 		consumer: consumer,
 	}
 
-	/*
-	 * Force one immediate database check after worker startup.
-	 */
 	queue.signal <- struct{}{}
 
 	consumeContext, err := consumer.Consume(
@@ -111,15 +112,11 @@ func (l *QueueSignalListener) RegisterQueue(
 				message.Data(),
 				&signal,
 			); err != nil {
-				/*
-				 * Invalid signaling data should not block the
-				 * consumer forever.
-				 */
 				_ = message.Term()
 				return
 			}
 
-			if signal.Queue != queueName {
+			if signal.Queue != queueName || signal.TenantID != tenantID {
 				_ = message.Term()
 				return
 			}
@@ -127,12 +124,6 @@ func (l *QueueSignalListener) RegisterQueue(
 			select {
 			case queue.signal <- struct{}{}:
 			default:
-				/*
-				 * A wake-up is already pending.
-				 *
-				 * Coalescing is intentional because the database
-				 * remains the source of truth.
-				 */
 			}
 
 			_ = message.Ack()
@@ -140,25 +131,29 @@ func (l *QueueSignalListener) RegisterQueue(
 	)
 	if err != nil {
 		return fmt.Errorf(
-			"start NATS consumer for queue %q: %w",
+			"start NATS consumer for tenant %q queue %q: %w",
+			tenantID,
 			queueName,
 			err,
 		)
 	}
 
 	queue.consume = consumeContext
-	l.queues[queueName] = queue
+	l.queues[key] = queue
 
 	return nil
 }
 
 func (l *QueueSignalListener) WaitForSignal(
 	ctx context.Context,
+	tenantID string,
 	queueName string,
 	timeout time.Duration,
 ) (bool, error) {
+	key := fmt.Sprintf("%s:%s", tenantID, queueName)
+
 	l.mu.RLock()
-	queue := l.queues[queueName]
+	queue := l.queues[key]
 	closed := l.closed
 	l.mu.RUnlock()
 
@@ -170,8 +165,9 @@ func (l *QueueSignalListener) WaitForSignal(
 
 	if queue == nil {
 		return false, fmt.Errorf(
-			"queue %q is not registered",
+			"queue %q for tenant %q is not registered",
 			queueName,
+			tenantID,
 		)
 	}
 
@@ -212,15 +208,18 @@ func (l *QueueSignalListener) Close() error {
 }
 
 func (l *QueueSignalListener) subjectForQueue(
+	tenantID string,
 	queueName string,
 ) string {
 	return l.subjectPrefix +
 		"." +
+		encodeQueueName(tenantID) +
+		"." +
 		encodeQueueName(queueName)
 }
 
-func durableNameForQueue(queueName string) string {
-	return "sqlflow-" + encodeQueueName(queueName)
+func durableNameForQueue(tenantID string, queueName string) string {
+	return "sqlflow-" + encodeQueueName(tenantID) + "-" + encodeQueueName(queueName)
 }
 
 var _ sqlflow.QueueSignalListener =

@@ -9,6 +9,7 @@ import (
 var ErrSuspendTask = errors.New("task suspended waiting for event")
 
 type TaskContext struct {
+	TenantID  string
 	TaskID    string
 	RunID     string
 	Attempt   int
@@ -21,7 +22,7 @@ type TaskContext struct {
 func Step[T any](ctx *TaskContext, stepName string, action func() (T, error)) (T, error) {
 	var zero T
 
-	stateRow, err := ctx.DB.GetTaskCheckpointState(ctx.Ctx, ctx.QueueName, ctx.TaskID, stepName, 0)
+	stateRow, err := ctx.DB.GetTaskCheckpointState(ctx.Ctx, ctx.TenantID, ctx.QueueName, ctx.TaskID, stepName, 0)
 	if err != nil {
 		return zero, err
 	}
@@ -38,15 +39,15 @@ func Step[T any](ctx *TaskContext, stepName string, action func() (T, error)) (T
 	}
 
 	stateBytes, _ := json.Marshal(result)
-    
-	err = ctx.DB.SetTaskCheckpointState(ctx.Ctx, ctx.QueueName, ctx.TaskID, stepName, string(stateBytes), ctx.RunID, 0)
-	
+
+	err = ctx.DB.SetTaskCheckpointState(ctx.Ctx, ctx.TenantID, ctx.QueueName, ctx.TaskID, stepName, string(stateBytes), ctx.RunID, 0)
+
 	return result, err
 }
 
 func AwaitEvent[T any](ctx *TaskContext, eventName string, stepName string, timeout *int) (T, error) {
 	var zero T
-	result, err := ctx.DB.AwaitEvent(ctx.Ctx, ctx.QueueName, ctx.TaskID, ctx.RunID, stepName, eventName, timeout)
+	result, err := ctx.DB.AwaitEvent(ctx.Ctx, ctx.TenantID, ctx.QueueName, ctx.TaskID, ctx.RunID, stepName, eventName, timeout)
 	if err != nil {
 		return zero, err
 	}
@@ -56,7 +57,7 @@ func AwaitEvent[T any](ctx *TaskContext, eventName string, stepName string, time
 	}
 
 	if result.ShouldSuspend {
-		return zero, ErrSuspendTask 
+		return zero, ErrSuspendTask
 	}
 
 	var payload T

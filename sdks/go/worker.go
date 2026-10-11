@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"time"
-    "fmt"
+
 	"golang.org/x/time/rate"
 )
 
@@ -25,15 +26,17 @@ type Worker struct {
 type QueueSignalListener interface {
 	RegisterQueue(
 		ctx context.Context,
+		tenantID string,
 		queueName string,
 	) error
 
 	WaitForSignal(
 		ctx context.Context,
+		tenantID string,
 		queueName string,
 		timeout time.Duration,
 	) (bool, error)
-    
+
 	Close() error
 }
 
@@ -47,23 +50,19 @@ func NewWorker(
 	var limiter *rate.Limiter
 
 	if opts.MaxTasksPerSecond > 0 {
-
 		burst := opts.RateLimitBurstSize
-
 		if burst <= 0 {
 			burst = opts.MaxTasksPerSecond
 		}
-
 		limiter = rate.NewLimiter(
 			rate.Limit(opts.MaxTasksPerSecond),
 			burst,
 		)
 	}
-    
-    if opts.ClaimTimeoutInSeconds <= 0 {
-        opts.ClaimTimeoutInSeconds = 300
-    }
 
+	if opts.ClaimTimeoutInSeconds <= 0 {
+		opts.ClaimTimeoutInSeconds = 300
+	}
 
 	return &Worker{
 		Options:     opts,
@@ -78,19 +77,19 @@ func NewWorker(
 	}
 }
 
-func (w *Worker) Start(
-	ctx context.Context,
-) error {
+func (w *Worker) Start(ctx context.Context) error {
 	workerCtx, cancel := context.WithCancel(ctx)
 
 	if err := w.signals.RegisterQueue(
 		workerCtx,
+		w.Options.TenantID,
 		w.Options.QueueName,
 	); err != nil {
 		cancel()
 		return fmt.Errorf(
-			"register queue signaling for %q: %w",
+			"register queue signaling for %q (tenant: %s): %w",
 			w.Options.QueueName,
+			w.Options.TenantID,
 			err,
 		)
 	}
@@ -98,8 +97,9 @@ func (w *Worker) Start(
 	w.cancel = cancel
 
 	log.Printf(
-		"Worker %s started on queue %q",
+		"Worker %s started for tenant %q on queue %q",
 		w.Options.WorkerID,
+		w.Options.TenantID,
 		w.Options.QueueName,
 	)
 
@@ -114,21 +114,14 @@ func (w *Worker) Stop() {
 	}
 }
 
-func (w *Worker) pollLoop(
-	ctx context.Context,
-) {
+func (w *Worker) pollLoop(ctx context.Context) {
 	queueMayContainWork := true
-
-	reconciliationInterval :=
-		time.Minute
+	reconciliationInterval := time.Minute
 
 	for {
-
 		select {
-
 		case <-ctx.Done():
 			return
-
 		default:
 		}
 
@@ -136,7 +129,7 @@ func (w *Worker) pollLoop(
 			delay := reconciliationInterval
 			skipWait := false
 
-			nextAvailableAt, err := w.DB.GetNextAvailableAt(ctx, w.Options.QueueName)
+			nextAvailableAt, err := w.DB.GetNextAvailableAt(ctx, w.Options.TenantID, w.Options.QueueName)
 
 			if err != nil {
 				log.Printf(
@@ -144,7 +137,7 @@ func (w *Worker) pollLoop(
 					err,
 				)
 			} else if nextAvailableAt != nil {
-				
+
 				timeUntilNextJob := time.Until(*nextAvailableAt)
 
 				if timeUntilNextJob <= 0 {
@@ -155,18 +148,14 @@ func (w *Worker) pollLoop(
 			}
 
 			if !skipWait && delay > 0 {
-				_, err := w.signals.WaitForSignal(ctx, w.Options.QueueName, delay)
+				_, err := w.signals.WaitForSignal(ctx, w.Options.TenantID, w.Options.QueueName, delay)
 
 				if err != nil {
-
 					if ctx.Err() != nil {
 						return
 					}
-
 					log.Printf("[ERROR] Signal wait failed: %v", err)
-
 					time.Sleep(time.Second)
-
 					continue
 				}
 			}
@@ -175,87 +164,56 @@ func (w *Worker) pollLoop(
 		}
 
 		availableCapacity := cap(w.semaphore) - len(w.semaphore)
-
 		if availableCapacity <= 0 {
-
-			time.Sleep(
-				10 * time.Millisecond,
-			)
-
+			time.Sleep(10 * time.Millisecond)
 			continue
 		}
 
 		claimQty := availableCapacity
-
 		if w.rateLimiter != nil {
-
-			err := w.rateLimiter.WaitN(
-				ctx,
-				claimQty,
-			)
-
+			err := w.rateLimiter.WaitN(ctx, claimQty)
 			if err != nil {
-
 				if ctx.Err() != nil {
 					return
 				}
-
 				continue
 			}
 		}
 
-        tasks, err := w.DB.ClaimTask(
-            ctx,
-            w.Options.QueueName,
-            w.Options.WorkerID,
-            w.Options.ClaimTimeoutInSeconds,
-            claimQty,
-        )
+		tasks, err := w.DB.ClaimTask(
+			ctx,
+			w.Options.TenantID,
+			w.Options.QueueName,
+			w.Options.WorkerID,
+			w.Options.ClaimTimeoutInSeconds,
+			claimQty,
+		)
 
 		if err != nil {
-
-			log.Printf(
-				"[ERROR] Error claiming tasks: %v",
-				err,
-			)
-
+			log.Printf("[ERROR] Error claiming tasks: %v", err)
 			queueMayContainWork = false
-
 			time.Sleep(time.Second)
-
 			continue
 		}
 
 		if len(tasks) == 0 {
-
 			queueMayContainWork = false
-
 			continue
 		}
 
 		for _, task := range tasks {
-
 			w.semaphore <- struct{}{}
-
 			taskCopy := task
 
 			go func() {
-
 				defer func() {
 					<-w.semaphore
 				}()
-
-				w.processTask(
-					ctx,
-					taskCopy,
-				)
-
+				w.processTask(ctx, taskCopy)
 			}()
 		}
 
-		queueMayContainWork =
-			len(tasks) ==
-				claimQty
+		queueMayContainWork = len(tasks) == claimQty
 	}
 }
 
@@ -265,12 +223,12 @@ func (w *Worker) processTask(ctx context.Context, task ClaimedTask) {
 	if !exists {
 		log.Printf("Task %s is not registered", task.TaskName)
 
-		w.DB.FailRun(ctx, w.Options.QueueName, task.RunID, `{"error":"unregistered"}`, time.Now().Add(5*time.Minute))
-
+		w.DB.FailRun(ctx, w.Options.TenantID, w.Options.QueueName, task.RunID, `{"error":"unregistered"}`, time.Now().Add(5*time.Minute))
 		return
 	}
 
 	taskCtx := &TaskContext{
+		TenantID:  w.Options.TenantID,
 		TaskID:    task.TaskID,
 		RunID:     task.RunID,
 		Attempt:   task.Attempt,
@@ -289,9 +247,9 @@ func (w *Worker) processTask(ctx context.Context, task ClaimedTask) {
 		log.Printf("Task %s failed: %v", task.TaskID, err)
 		retryAt := time.Now().Add(time.Duration(taskCtx.Attempt*taskCtx.Attempt) * time.Minute)
 		errorDetails, _ := json.Marshal(map[string]string{"error": err.Error()})
-		w.DB.FailRun(ctx, w.Options.QueueName, task.RunID, string(errorDetails), retryAt)
+		w.DB.FailRun(ctx, w.Options.TenantID, w.Options.QueueName, task.RunID, string(errorDetails), retryAt)
 		return
 	}
 
-	w.DB.CompleteRun(ctx, w.Options.QueueName, task.RunID, "succeeded")
+	w.DB.CompleteRun(ctx, w.Options.TenantID, w.Options.QueueName, task.RunID, "succeeded")
 }
