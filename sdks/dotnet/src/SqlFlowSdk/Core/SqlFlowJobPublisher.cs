@@ -4,6 +4,7 @@ using SqlFlowSdk;
 
 namespace SqlFlowSdk.Core;
 
+
 /// <summary>
 /// Provides an implementation of the IJobPublisher interface that publishes jobs using the SqlFlow job system.
 /// </summary>
@@ -21,7 +22,7 @@ internal class SqlFlowJobPublisher : IJobPublisher
         _registry = registry;
     }
 
-    public Task<SpawnResult> PublishAsync<TJob, TRequest>(string jobName, TRequest request, CancellationToken cancellationToken)
+    public Task<SpawnResult> PublishAsync<TJob, TRequest>(string tenantId, string jobName, TRequest request, CancellationToken cancellationToken)
         where TRequest : notnull
     {
         if (!_registry.Routes.TryGetValue(jobName, out (Type JobType, string Queue) routing))
@@ -34,6 +35,7 @@ internal class SqlFlowJobPublisher : IJobPublisher
             throw new InvalidOperationException($"Type-Mismatch for Job '{jobName}'.");
         }
 
-        return _client.SpawnAsync(new SpawnOptions { Queue = routing.Queue }, jobName, request, cancellationToken);
+        return _client.SpawnAsync(new SpawnOptions { TenantId = tenantId, Queue = routing.Queue }, jobName, request, cancellationToken);
     }
 }
+

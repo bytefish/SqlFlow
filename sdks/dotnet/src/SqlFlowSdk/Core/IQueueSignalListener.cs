@@ -1,5 +1,4 @@
-﻿namespace SqlFlowSdk.Core;
-
+﻿
 /// <summary>
 /// Receives best-effort notifications indicating that a queue may
 /// contain runnable work.
@@ -20,6 +19,7 @@ public interface IQueueSignalListener
     /// <summary>
     /// Registers a queue with the listener.
     /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
     /// <param name="queueName">The queue to register.</param>
     /// <remarks>
     /// Registration must be idempotent.
@@ -28,11 +28,12 @@ public interface IQueueSignalListener
     /// after registration so that work created before the listener started
     /// is not overlooked.
     /// </remarks>
-    void RegisterQueue(string queueName);
+    void RegisterQueue(string tenantId, string queueName);
 
     /// <summary>
     /// Waits until the queue is signaled or the fallback timeout elapses.
     /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
     /// <param name="queueName">The queue to wait for.</param>
     /// <param name="fallbackTimeout">
     /// Maximum time to wait before allowing the worker to inspect the
@@ -46,6 +47,7 @@ public interface IQueueSignalListener
     /// otherwise <see langword="false"/> if the fallback timeout elapsed.
     /// </returns>
     ValueTask<bool> WaitAsync(
+        string tenantId,
         string queueName,
         TimeSpan fallbackTimeout,
         CancellationToken cancellationToken);
@@ -57,16 +59,19 @@ public interface IQueueSignalListener
 /// </summary>
 public sealed class PollingQueueSignalListener : IQueueSignalListener
 {
-    public void RegisterQueue(string queueName)
+    public void RegisterQueue(string tenantId, string queueName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
     }
 
     public async ValueTask<bool> WaitAsync(
+        string tenantId,
         string queueName,
         TimeSpan fallbackTimeout,
         CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
         if (fallbackTimeout <= TimeSpan.Zero)

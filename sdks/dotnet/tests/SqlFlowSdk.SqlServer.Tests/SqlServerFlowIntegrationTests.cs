@@ -29,11 +29,12 @@ public class SqlServerFlowIntegrationTests
 
         ConnectionString = DockerContainers.ConnectionString;
     }
+
     [TestMethod]
     public async Task Test_BasicTaskExecution_Flow()
     {
-
         // Arrange
+        const string tenantId = "tenant-alpha";
         const string queueName = "test-queue";
         const string taskName = "add-numbers";
 
@@ -71,6 +72,7 @@ public class SqlServerFlowIntegrationTests
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
         await client.CreateQueueAsync(
+            tenantId,
             queueName,
             CancellationToken.None);
 
@@ -107,6 +109,7 @@ public class SqlServerFlowIntegrationTests
         var workerOptions =
             new WorkerOptions
             {
+                TenantId = tenantId,
                 Queue = queueName,
                 Concurrency = 1,
                 WorkerId =
@@ -138,6 +141,7 @@ public class SqlServerFlowIntegrationTests
             await client.SpawnAsync(
                 new SpawnOptions
                 {
+                    TenantId = tenantId,
                     Queue = queueName
                 },
                 taskName,
@@ -149,13 +153,13 @@ public class SqlServerFlowIntegrationTests
                 CancellationToken.None);
 
             /*
-             * In production, PostgresQueueSignalListener receives
-             * PostgreSQL NOTIFY and wakes the dispatcher.
+             * In production, SqlServerQueueSignalListener receives
+             * Service Broker notifications and wakes the dispatcher.
              *
              * This test injects a controllable signal listener and
-             * triggers the wake-up explicitly.
+             * triggers the wake-up explicitly using tenant and queue.
              */
-            signalListener.Signal(queueName);
+            signalListener.Signal(tenantId, queueName);
 
             int result;
 
@@ -203,16 +207,20 @@ public class SqlServerFlowIntegrationTests
             Channel<bool>> _queueSignals =
                 new(StringComparer.Ordinal);
 
-        public void RegisterQueue(string queueName)
+        private static string GetSignalKey(string tenantId, string queueName) => $"{tenantId}:{queueName}";
+
+        public void RegisterQueue(string tenantId, string queueName)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
+            string signalKey = GetSignalKey(tenantId, queueName);
             Channel<bool> newChannel =
                 CreateChannel();
 
             Channel<bool> actualChannel =
                 _queueSignals.GetOrAdd(
-                    queueName,
+                    signalKey,
                     newChannel);
 
             if (ReferenceEquals(
@@ -231,10 +239,12 @@ public class SqlServerFlowIntegrationTests
         }
 
         public async ValueTask<bool> WaitAsync(
+            string tenantId,
             string queueName,
             TimeSpan fallbackTimeout,
             CancellationToken cancellationToken)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
             if (fallbackTimeout <= TimeSpan.Zero)
@@ -244,13 +254,15 @@ public class SqlServerFlowIntegrationTests
                     "The fallback timeout must be greater than zero.");
             }
 
+            string signalKey = GetSignalKey(tenantId, queueName);
+
             if (!_queueSignals.TryGetValue(
-                    queueName,
+                    signalKey,
                     out Channel<bool>? channel))
             {
-                RegisterQueue(queueName);
+                RegisterQueue(tenantId, queueName);
 
-                channel = _queueSignals[queueName];
+                channel = _queueSignals[signalKey];
             }
 
             using CancellationTokenSource timeoutCancellation =
@@ -279,17 +291,20 @@ public class SqlServerFlowIntegrationTests
             }
         }
 
-        public void Signal(string queueName)
+        public void Signal(string tenantId, string queueName)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
+            string signalKey = GetSignalKey(tenantId, queueName);
+
             if (!_queueSignals.TryGetValue(
-                    queueName,
+                    signalKey,
                     out Channel<bool>? channel))
             {
-                RegisterQueue(queueName);
+                RegisterQueue(tenantId, queueName);
 
-                channel = _queueSignals[queueName];
+                channel = _queueSignals[signalKey];
             }
 
             /*

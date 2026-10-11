@@ -1,4 +1,5 @@
-﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+﻿
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using Microsoft.Extensions.Logging;
 using SqlFlowSdk.Core;
@@ -37,27 +38,31 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
         _logger = logger;
     }
 
+    private static string GetActiveKey(WorkerOptions options) => $"{options.TenantId}:{options.Queue}";
+
     public async Task RunWorkerAsync(
         WorkerOptions options,
         CancellationToken cancellationToken)
     {
         ValidateOptions(options);
 
-        if (!_activeQueues.TryAdd(options.Queue, 0))
+        string activeKey = GetActiveKey(options);
+
+        if (!_activeQueues.TryAdd(activeKey, 0))
         {
             throw new InvalidOperationException(
-                $"A worker for queue '{options.Queue}' is already running.");
+                $"A worker for tenant '{options.TenantId}' and queue '{options.Queue}' is already running.");
         }
 
         try
         {
-            _signals.RegisterQueue(options.Queue);
+            _signals.RegisterQueue(options.TenantId, options.Queue);
 
             await RunQueueAsync(options, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            _activeQueues.TryRemove(options.Queue, out _);
+            _activeQueues.TryRemove(activeKey, out _);
         }
     }
 
@@ -131,7 +136,7 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
                     try
                     {
                         // Get the next available time for the queue from the database
-                        DateTimeOffset? nextAvailableAt = await _client.GetNextAvailableAtAsync(options.Queue, cancellationToken).ConfigureAwait(false);
+                        DateTimeOffset? nextAvailableAt = await _client.GetNextAvailableAtAsync(options.TenantId, options.Queue, cancellationToken).ConfigureAwait(false);
 
                         // Calculate the time until the next job is available
                         if (nextAvailableAt.HasValue)
@@ -151,11 +156,12 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        _logger.LogWarning(ex, "Failed to retrieve next available time for queue '{Queue}'. Falling back to default reconciliation interval.", options.Queue);
+                        _logger.LogWarning(ex, "Failed to retrieve next available time for queue '{Queue}' on tenant '{Tenant}'. Falling back to default reconciliation interval.", options.Queue, options.TenantId);
                     }
 
                     // Reseliently wait for either a signal or the calculated delay, whichever comes first
                     await _signals.WaitAsync(
+                            options.TenantId,
                             options.Queue,
                             delay,
                             cancellationToken)
@@ -193,6 +199,7 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
 
                     IReadOnlyList<ClaimedTask> tasks =
                         (await _client.ClaimTasksAsync(
+                                options.TenantId,
                                 options.Queue,
                                 options.WorkerId,
                                 cancellationToken,
@@ -272,6 +279,7 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
                 {
                     await _client.ExecuteTaskAsync(
                             task,
+                            options.TenantId,
                             options.Queue,
                             options.ClaimTimeout,
                             cancellationToken,
@@ -351,8 +359,8 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
             {
                 _logger.LogError(
                     callbackException,
-                    "The worker error callback failed for queue {Queue}.",
-                    options.Queue);
+                    "The worker error callback failed for tenant {TenantId}, queue {Queue}.",
+                    options.TenantId, options.Queue);
             }
 
             return;
@@ -360,14 +368,15 @@ public sealed class SqlFlowDispatcher : ISqlFlowDispatcher
 
         _logger.LogError(
             exception,
-            "Worker error in queue {Queue}.",
-            options.Queue);
+            "Worker error in tenant {TenantId}, queue {Queue}.",
+            options.TenantId, options.Queue);
     }
 
     private static void ValidateOptions(
         WorkerOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.TenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Queue);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.WorkerId);
 

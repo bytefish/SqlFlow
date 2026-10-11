@@ -16,6 +16,12 @@ namespace SqlFlowSdk.Core;
 public class ClaimedTask
 {
     /// <summary>
+    /// Tenant that this task belongs to.
+    /// </summary>
+    [JsonPropertyName("tenant_id")]
+    public required string TenantId { get; set; }
+
+    /// <summary>
     /// The ID of the run that this task belongs to. This is a unique identifier for the entire workflow or job that 
     /// this task is a part of. It can be used to group related tasks together and track their progress as a unit.
     /// </summary>

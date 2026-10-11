@@ -20,13 +20,15 @@ public sealed class SqlFlowServiceBuilder
     public IServiceCollection Services { get; }
 
     /// <summary>
-    /// Adds a worker for the specified queue.
+    /// Adds a worker for the specified tenant and queue.
     /// </summary>
     public SqlFlowServiceBuilder AddWorker(
+        string tenantId,
         string queueName,
         Action<SqlFlowWorkerBuilder> configure)
     {
         Services.AddSqlFlowWorker(
+            tenantId,
             queueName,
             configure);
 
@@ -37,9 +39,11 @@ public sealed class SqlFlowServiceBuilder
     /// Adds a worker using the default worker configuration.
     /// </summary>
     public SqlFlowServiceBuilder AddWorker(
+        string tenantId,
         string queueName)
     {
         return AddWorker(
+            tenantId,
             queueName,
             static _ => { });
     }
@@ -140,10 +144,12 @@ internal static class SqlFlowWorkerServiceCollectionExtensions
 {
     internal static IServiceCollection AddSqlFlowWorker(
         this IServiceCollection services,
+        string tenantId,
         string queueName,
         Action<SqlFlowWorkerBuilder> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
         ArgumentNullException.ThrowIfNull(configure);
 
@@ -152,19 +158,18 @@ internal static class SqlFlowWorkerServiceCollectionExtensions
 
         if (registry.WorkerConfigs.Any(
                 configuration =>
-                    string.Equals(
-                        configuration.QueueName,
-                        queueName,
-                        StringComparison.Ordinal)))
+                    string.Equals(configuration.TenantId, tenantId, StringComparison.Ordinal) &&
+                    string.Equals(configuration.QueueName, queueName, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
-                $"A SqlFlow worker for queue '{queueName}' " +
+                $"A SqlFlow worker for tenant '{tenantId}' and queue '{queueName}' " +
                 "is already registered.");
         }
 
         var workerConfiguration =
             new WorkerConfiguration
             {
+                TenantId = tenantId,
                 QueueName = queueName
             };
 
@@ -210,6 +215,7 @@ internal static class SqlFlowWorkerServiceCollectionExtensions
                         .GetRequiredService<
                             ILogger<GenericSqlFlowWorker>>(),
 
+                    tenantId: tenantId,
                     queueName: queueName));
 
         return services;
@@ -221,22 +227,19 @@ internal static class SqlFlowWorkerServiceCollectionExtensions
         if (configuration.Concurrency <= 0)
         {
             throw new InvalidOperationException(
-                $"Worker concurrency for queue " +
-                $"'{configuration.QueueName}' must be greater than zero.");
+                $"Worker concurrency for tenant '{configuration.TenantId}' and queue '{configuration.QueueName}' must be greater than zero.");
         }
 
         if (configuration.BatchSize is <= 0)
         {
             throw new InvalidOperationException(
-                $"Worker batch size for queue " +
-                $"'{configuration.QueueName}' must be greater than zero.");
+                $"Worker batch size for tenant '{configuration.TenantId}' and queue '{configuration.QueueName}' must be greater than zero.");
         }
 
         if (configuration.ClaimTimeoutInSeconds <= 0)
         {
             throw new InvalidOperationException(
-                $"Worker claim timeout for queue " +
-                $"'{configuration.QueueName}' must be greater than zero.");
+                $"Worker claim timeout for tenant '{configuration.TenantId}' and queue '{configuration.QueueName}' must be greater than zero.");
         }
     }
 }

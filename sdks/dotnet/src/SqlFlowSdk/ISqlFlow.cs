@@ -22,27 +22,30 @@ public interface ISqlFlow
     /// <summary>
     /// Creates a new message queue with the specified name if it does not already exist.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queueName">The name of the queue to create.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task CreateQueueAsync(string queueName, CancellationToken cancellationToken);
+    Task CreateQueueAsync(string tenantId, string queueName, CancellationToken cancellationToken);
 
     /// <summary>
     /// Deletes the message queue with the specified name and all tasks associated with it. This is a destructive operation that cannot be undone, 
     /// so use with caution. It will remove all tasks in the queue, including pending, claimed, and failed tasks. It will also remove the queue 
     /// itself, so it will no longer be available for spawning or claiming tasks.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queueName">The name of the queue to delete.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task DropQueueAsync(string queueName, CancellationToken cancellationToken);
+    Task DropQueueAsync(string tenantId, string queueName, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns a list of all existing message queues in the SqlFlow system. This can be used to discover available queues for spawning and claiming tasks.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>The list of all existing message queues.</returns>
-    Task<IEnumerable<string>> ListQueuesAsync(CancellationToken cancellationToken);
+    Task<IEnumerable<string>> ListQueuesAsync(string tenantId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Spawns a new task with the specified name and parameters, and enqueues it onto the specified message queue. The task will be picked up by 
@@ -73,6 +76,7 @@ public interface ISqlFlow
     /// </summary>
     /// <param name="options">The options for canceling the task.</param>
     /// <param name="taskId">The ID of the task to cancel.</param>
+    /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     Task CancelTaskAsync(CancelTaskOptions options, string taskId, CancellationToken cancellationToken);
 
@@ -80,46 +84,50 @@ public interface ISqlFlow
     /// Claims one or more tasks from the specified message queue for execution by the worker with the given ID. The claimed tasks 
     /// will be locked for the specified claim timeout duration, during which they will not be available for other workers to claim.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue from which to claim tasks.</param>
     /// <param name="workerId">The ID of the worker claiming the tasks.</param>
     /// <param name="cancellationToken"> A cancellation token to cancel the operation.</param>
     /// <param name="claimTimeout">The duration for which the tasks will be locked.</param>
     /// <param name="batchSize">The number of tasks to claim.</param>
     /// <returns>A list of claimed tasks by the worker.</returns>
-    Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1);
+    Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(string tenantId, string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1);
 
     /// <summary>
     /// Processes a batch of tasks from the specified message queue. This method will claim a batch of tasks and execute them 
     /// sequentially using the registered handlers.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue from which to claim tasks.</param>
     /// <param name="workerId">The ID of the worker processing the tasks.</param>
+    /// <param name="cancellationToken"> A cancellation token to cancel the operation.</param>
     /// <param name="claimTimeout">The duration for which the tasks will be locked.</param>
     /// <param name="batchSize">The number of tasks to process in the batch.</param>
-    /// <param name="cancellationToken"> A cancellation token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task WorkBatchAsync(string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1);
+    Task WorkBatchAsync(string tenantId, string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1);
 
     /// <summary>
     /// Executes a single claimed task using the registered handler for its task name. This method will handle the execution of the task and 
     /// return the result. It will also handle any exceptions that occur during execution and update the task status accordingly. 
     /// </summary>
     /// <param name="task">The claimed task to execute.</param>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue to which the task belongs.</param>
     /// <param name="claimTimeout">The duration for which the task is locked.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <param name="fatalOnLeaseTimeout">A value indicating whether to treat lease timeout as a fatal error.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task ExecuteTaskAsync(ClaimedTask task, string queue, int claimTimeout, CancellationToken cancellationToken, bool fatalOnLeaseTimeout = false);
+    Task ExecuteTaskAsync(ClaimedTask task, string tenantId, string queue, int claimTimeout, CancellationToken cancellationToken, bool fatalOnLeaseTimeout = false);
 
     /// <summary>
     /// Gets the next available time for a task to be executed in the specified message queue. This can be used to determine when a worker can
     /// claim the next task.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue to check.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task<DateTimeOffset?> GetNextAvailableAtAsync(string queue, CancellationToken cancellationToken);
+    Task<DateTimeOffset?> GetNextAvailableAtAsync(string tenantId, string queue, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -169,24 +177,27 @@ public interface ISqlFlowManagementClient
     /// Creates a new message queue with the specified name if it does not already exist. This operation is typically used 
     /// by administrators or management tools to set up new queues for task processing.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queueName">The name of the queue to create.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task CreateQueueAsync(string queueName);
+    Task CreateQueueAsync(string tenantId, string queueName);
 
     /// <summary>
     /// Drops the message queue with the specified name and all tasks associated with it. This is a destructive operation 
     /// that cannot be undone, so use with caution.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queueName">The name of the queue to drop.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task DropQueueAsync(string queueName);
+    Task DropQueueAsync(string tenantId, string queueName);
 
     /// <summary>
     /// Lists all existing message queues in the SqlFlow system. This can be used to discover available queues for 
     /// spawning and claiming tasks.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <returns>The list of all existing message queues.</returns>
-    Task<IEnumerable<string>> ListQueuesAsync();
+    Task<IEnumerable<string>> ListQueuesAsync(string tenantId);
 }
 
 /// <summary>
@@ -208,31 +219,34 @@ public interface ISqlFlowWorkerClient
     /// tasks will be locked for the specified claim timeout duration, during which they will not be available for other workers 
     /// to claim.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue from which to claim tasks.</param>
     /// <param name="workerId">The ID of the worker claiming the tasks.</param>
     /// <param name="claimTimeout">The duration for which the tasks will be locked.</param>
     /// <param name="batchSize">The number of tasks to claim.</param>
     /// <returns>The list of claimed tasks.</returns>
-    Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(string queue, string workerId, int claimTimeout = 120, int batchSize = 1);
+    Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(string tenantId, string queue, string workerId, int claimTimeout = 120, int batchSize = 1);
 
     /// <summary>
     /// Processes a batch of claimed tasks.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue from which to claim tasks.</param>
     /// <param name="workerId">The ID of the worker processing the tasks.</param>
     /// <param name="claimTimeout">The duration for which the tasks will be locked.</param>
     /// <param name="batchSize">The number of tasks to process.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task WorkBatchAsync(string queue, string workerId, int claimTimeout = 120, int batchSize = 1);
+    Task WorkBatchAsync(string tenantId, string queue, string workerId, int claimTimeout = 120, int batchSize = 1);
 
     /// <summary>
     /// Executes a single claimed task using the registered handler for its task name. This method will handle the execution of the task and 
     /// return the result. It will also handle any exceptions that occur during execution and update the
     /// </summary>
     /// <param name="task">The claimed task to execute.</param>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue from which the task was claimed.</param>
     /// <param name="claimTimeout">The duration for which the task was locked.</param>
     /// <param name="fatalOnLeaseTimeout">A value indicating whether to treat lease timeout as fatal.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    Task ExecuteTaskAsync(ClaimedTask task, string queue, int claimTimeout, bool fatalOnLeaseTimeout = false);
+    Task ExecuteTaskAsync(ClaimedTask task, string tenantId, string queue, int claimTimeout, bool fatalOnLeaseTimeout = false);
 }

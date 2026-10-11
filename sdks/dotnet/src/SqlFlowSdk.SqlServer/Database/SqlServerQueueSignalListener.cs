@@ -39,29 +39,34 @@ public sealed class SqlServerQueueSignalListener :
         _options.Validate();
     }
 
-    public void RegisterQueue(string queueName)
+    private static string GetSignalKey(string tenantId, string queueName) => $"{tenantId}:{queueName}";
+
+    public void RegisterQueue(string tenantId, string queueName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
+        string signalKey = GetSignalKey(tenantId, queueName);
         Channel<bool> newChannel = CreateSignalChannel();
 
         Channel<bool> actualChannel =
             _queueSignals.GetOrAdd(
-                queueName,
+                signalKey,
                 newChannel);
 
         if (ReferenceEquals(actualChannel, newChannel))
         {
-            // Initial reconciliation for newly registered queue
             actualChannel.Writer.TryWrite(true);
         }
     }
 
     public async ValueTask<bool> WaitAsync(
+        string tenantId,
         string queueName,
         TimeSpan fallbackTimeout,
         CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
         if (fallbackTimeout <= TimeSpan.Zero)
@@ -71,13 +76,14 @@ public sealed class SqlServerQueueSignalListener :
                 "Fallback timeout must be greater than zero.");
         }
 
+        string signalKey = GetSignalKey(tenantId, queueName);
+
         if (!_queueSignals.TryGetValue(
-                queueName,
+                signalKey,
                 out Channel<bool>? channel))
         {
-            RegisterQueue(queueName);
-
-            channel = _queueSignals[queueName];
+            RegisterQueue(tenantId, queueName);
+            channel = _queueSignals[signalKey];
         }
 
         using CancellationTokenSource timeout =
@@ -144,10 +150,8 @@ public sealed class SqlServerQueueSignalListener :
             "Listening for SQL Server Service Broker queue notifications on {Queue}.",
             NotificationQueueName);
 
-        // Reconcile state that may have existed before connection
         SignalAllSurroundingWork();
 
-        // Using WAITFOR (RECEIVE) on the Service Broker Queue to block efficiently without CPU spinning
         string waitSql = @"
             WAITFOR (
                 RECEIVE TOP(1) message_body 
@@ -159,7 +163,7 @@ public sealed class SqlServerQueueSignalListener :
             try
             {
                 await using SqlCommand command = new(waitSql, connection);
-                command.CommandTimeout = 70; // Slightly higher than WAITFOR timeout
+                command.CommandTimeout = 70;
 
                 await using SqlDataReader reader = await command
                     .ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken)
@@ -174,9 +178,9 @@ public sealed class SqlServerQueueSignalListener :
                     }
                 }
             }
-            catch (SqlException ex) when (ex.Number == -2) // Timeout expired
+            catch (SqlException ex) when (ex.Number == -2)
             {
-                // Normal timeout, loop again
+                // Timeout expired, loop again
             }
         }
     }
@@ -185,35 +189,53 @@ public sealed class SqlServerQueueSignalListener :
     {
         try
         {
-            // Simple string extraction or JSON parse for {"queue":"...","event":"..."}
-            int queueIdx = jsonPayload.IndexOf("\"queue\":", StringComparison.Ordinal);
-            if (queueIdx >= 0)
+            string? tenantId = ExtractJsonField(jsonPayload, "tenant_id");
+            string? queueName = ExtractJsonField(jsonPayload, "queue");
+
+            if (!string.IsNullOrEmpty(tenantId) && !string.IsNullOrEmpty(queueName))
             {
-                int start = jsonPayload.IndexOf('"', queueIdx + 8);
-                if (start >= 0)
+                SignalQueue(GetSignalKey(tenantId, queueName));
+                return;
+            }
+            else if (!string.IsNullOrEmpty(queueName))
+            {
+                // Fallback for legacy messages containing only queue name
+                foreach (var key in _queueSignals.Keys)
                 {
-                    int end = jsonPayload.IndexOf('"', start + 1);
-                    if (end > start)
+                    if (key.EndsWith(":" + queueName, StringComparison.Ordinal))
                     {
-                        string queueName = jsonPayload.Substring(start + 1, end - start - 1);
-                        SignalQueue(queueName);
-                        return;
+                        SignalQueue(key);
                     }
                 }
+                return;
             }
         }
         catch
         {
-            // Fallback if payload cannot be parsed
+            // Fallback
         }
 
         SignalAllQueues();
     }
 
-    private void SignalQueue(string queueName)
+    private static string? ExtractJsonField(string json, string fieldName)
+    {
+        int fieldIdx = json.IndexOf($"\"{fieldName}\":", StringComparison.Ordinal);
+        if (fieldIdx < 0) return null;
+
+        int start = json.IndexOf('"', fieldIdx + fieldName.Length + 3);
+        if (start < 0) return null;
+
+        int end = json.IndexOf('"', start + 1);
+        if (end <= start) return null;
+
+        return json.Substring(start + 1, end - start - 1);
+    }
+
+    private void SignalQueue(string signalKey)
     {
         if (_queueSignals.TryGetValue(
-                queueName,
+                signalKey,
                 out Channel<bool>? channel))
         {
             channel.Writer.TryWrite(true);

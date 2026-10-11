@@ -9,14 +9,14 @@ using System.Threading.Channels;
 namespace SqlFlowSdk.Postgres;
 
 public sealed class PostgresQueueSignalListener :
-    BackgroundService,
-    IQueueSignalListener
+    BackgroundService, IQueueSignalListener
 {
     public const string NotificationChannel = "ssf_work_available";
 
     private readonly NpgsqlDataSource _dataSource;
     private readonly QueueSignalOptions _options;
     private readonly ILogger<PostgresQueueSignalListener> _logger;
+
 
     private readonly ConcurrentDictionary<string, Channel<bool>>
         _queueSignals = new(StringComparer.Ordinal);
@@ -37,15 +37,22 @@ public sealed class PostgresQueueSignalListener :
         _options.Validate();
     }
 
-    public void RegisterQueue(string queueName)
+    // Helper to generate the combined payload identifier
+    private static string GetSignalKey(string tenantId, string queueName) => $"{tenantId}:{queueName}";
+
+
+    public void RegisterQueue(string tenantId, string queueName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+
+        string signalKey = GetSignalKey(tenantId, queueName);
 
         Channel<bool> newChannel = CreateSignalChannel();
 
         Channel<bool> actualChannel =
             _queueSignals.GetOrAdd(
-                queueName,
+                signalKey,
                 newChannel);
 
         if (ReferenceEquals(actualChannel, newChannel))
@@ -57,10 +64,12 @@ public sealed class PostgresQueueSignalListener :
     }
 
     public async ValueTask<bool> WaitAsync(
+        string tenantId,
         string queueName,
         TimeSpan fallbackTimeout,
         CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
         if (fallbackTimeout <= TimeSpan.Zero)
@@ -70,12 +79,14 @@ public sealed class PostgresQueueSignalListener :
                 "Fallback timeout must be greater than zero.");
         }
 
+        string signalKey = GetSignalKey(tenantId, queueName);
+
         if (!_queueSignals.TryGetValue(
-                queueName,
+                signalKey,
                 out Channel<bool>? channel))
         {
-            RegisterQueue(queueName);
-            channel = _queueSignals[queueName];
+            RegisterQueue(tenantId, queueName);
+            channel = _queueSignals[signalKey];
         }
 
         using CancellationTokenSource timeout =
@@ -98,6 +109,7 @@ public sealed class PostgresQueueSignalListener :
             return false;
         }
     }
+
 
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
@@ -173,6 +185,7 @@ public sealed class PostgresQueueSignalListener :
         }
     }
 
+
     private void OnNotification(
         object? sender,
         NpgsqlNotificationEventArgs args)
@@ -191,13 +204,15 @@ public sealed class PostgresQueueSignalListener :
             return;
         }
 
+        // The Payload from pg_notify is now 'tenant_id:queue_name'
         SignalQueue(args.Payload);
     }
 
-    private void SignalQueue(string queueName)
+    private void SignalQueue(string payloadKey)
     {
+        // Directly matches the pattern in GetSignalKey
         if (_queueSignals.TryGetValue(
-                queueName,
+                payloadKey,
                 out Channel<bool>? channel))
         {
             channel.Writer.TryWrite(true);

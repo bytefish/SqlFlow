@@ -8,10 +8,11 @@ public interface IJobPublisher
     /// </summary>
     /// <typeparam name="TJob">Type of the Job</typeparam>
     /// <typeparam name="TRequest">Type of the Request</typeparam>
+    /// <param name="tenantId">The Tenant identifier</param>
     /// <param name="jobName">The Jobs name to publish to</param>
     /// <param name="request">Thre event being published</param>
     /// <param name="cancellationToken">Cancellation token to cancel the operation</param>
     /// <returns></returns>
-    Task<SpawnResult> PublishAsync<TJob, TRequest>(string jobName, TRequest request, CancellationToken cancellationToken)
+    Task<SpawnResult> PublishAsync<TJob, TRequest>(string tenantId, string jobName, TRequest request, CancellationToken cancellationToken)
         where TRequest : notnull;
 }

@@ -23,27 +23,28 @@ internal class NatsJobPublisher : IJobPublisher
         _logger = logger;
     }
 
-    public async Task<SpawnResult> PublishAsync<TJob, TRequest>(string jobName, TRequest request, CancellationToken cancellationToken)
+    public async Task<SpawnResult> PublishAsync<TJob, TRequest>(string tenantId, string jobName, TRequest request, CancellationToken cancellationToken)
         where TRequest : notnull
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
         if (!_registry.Routes.TryGetValue(jobName, out (Type JobType, string Queue) routing))
             throw new InvalidOperationException($"No Job found for name '{jobName}'.");
 
         if (routing.JobType != typeof(TJob))
             throw new InvalidOperationException($"Type-Mismatch for Job '{jobName}'.");
 
-        var result = await _client.SpawnAsync(new SpawnOptions { Queue = routing.Queue }, jobName, request, cancellationToken);
+        var result = await _client.SpawnAsync(new SpawnOptions { TenantId = tenantId, Queue = routing.Queue }, jobName, request, cancellationToken);
 
         try
         {
-            string subject = $"ssf.queues.{routing.Queue}";
+            string subject = $"ssf.tenants.{tenantId}.queues.{routing.Queue}";
 
-            // V3 API: PublishAsync directly on INatsJSContext
             await _js.PublishAsync(subject, data: "ping", cancellationToken: cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to publish NATS wake-up signal for queue '{Queue}'. Falling back to smart polling.", routing.Queue);
+            _logger.LogWarning(ex, "Failed to publish NATS wake-up signal for tenant '{TenantId}' and queue '{Queue}'. Falling back to smart polling.", tenantId, routing.Queue);
         }
 
         return result;

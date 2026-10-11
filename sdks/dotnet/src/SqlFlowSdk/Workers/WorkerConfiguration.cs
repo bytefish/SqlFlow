@@ -11,6 +11,11 @@ namespace SqlFlowSdk.Workers;
 public class WorkerConfiguration
 {
     /// <summary>
+    /// Gets or sets the tenant of the queue to which messages are sent or from which they are received.
+    /// </summary>
+    public string TenantId { get; set; } = "";
+
+    /// <summary>
     /// Gets or sets the name of the queue to which messages are sent or from which they are received.
     /// </summary>
     public string QueueName { get; set; } = "";
@@ -26,7 +31,7 @@ public class WorkerConfiguration
     /// <remarks>Set this value to control how frequently the system checks for updates or new data. A smaller
     /// interval increases polling frequency but may impact performance.</remarks>
     public double PollIntervalInSeconds { get; set; } = 0.5;
-    
+
     /// <summary>
     /// Gets or sets the claim timeout period, in seconds, for pending operations.
     /// </summary>
@@ -34,7 +39,7 @@ public class WorkerConfiguration
     /// to control the maximum duration an operation can be claimed before it is considered timed out and eligible for
     /// reprocessing.</remarks>
     public int ClaimTimeoutInSeconds { get; set; } = 120;
-    
+
     /// <summary>
     /// Gets or sets the maximum number of items to include in each batch operation.
     /// </summary>
@@ -42,7 +47,7 @@ public class WorkerConfiguration
     /// Setting this property allows control over the size of each batch, which can affect performance and resource
     /// usage.</remarks>
     public int? BatchSize { get; set; }
-    
+
     /// <summary>
     /// Gets or sets a value indicating whether a lease timeout should be treated as a fatal error.
     /// </summary>

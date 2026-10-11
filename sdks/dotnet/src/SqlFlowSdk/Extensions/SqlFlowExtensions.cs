@@ -7,6 +7,7 @@ using System.Text.Json;
 
 namespace SqlFlowSdk.Extensions;
 
+
 public static class SqlFlowExtensions
 {
     public static void UseJob<TJob, TParams, TResult>(

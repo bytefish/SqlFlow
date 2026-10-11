@@ -11,6 +11,12 @@ namespace SqlFlowSdk.Core;
 public class SpawnResult
 {
     /// <summary>
+    /// Tenant that the spawned task belongs to.
+    /// </summary>
+    [JsonPropertyName("tenant_id")]
+    public required string TenantId { get; set; }
+
+    /// <summary>
     /// The unique identifier for the spawned task. This is used by the SqlFlow system to track the 
     /// task and manage its execution. It can be used to claim the task for execution, cancel the task, 
     /// or query its status.

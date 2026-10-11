@@ -13,6 +13,12 @@ namespace SqlFlowSdk.Core;
 public class SpawnOptions
 {
     /// <summary>
+    /// Tenant to spawn the task for. Required for multi-tenancy isolation.
+    /// </summary>
+    [JsonPropertyName("tenant_id")]
+    public required string TenantId { get; set; }
+
+    /// <summary>
     /// Queue to spawn the task on. This determines which workers will be able to claim and 
     /// execute the task. It must match the queue specified in the RegisteredTask for the 
     /// task being spawned.

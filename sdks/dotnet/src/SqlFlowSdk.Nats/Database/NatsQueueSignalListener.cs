@@ -38,15 +38,19 @@ public sealed class NatsQueueSignalListener :
         _options.Validate();
     }
 
-    public void RegisterQueue(string queueName)
+    private static string GetSignalKey(string tenantId, string queueName) => $"{tenantId}:{queueName}";
+
+    public void RegisterQueue(string tenantId, string queueName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
+        string signalKey = GetSignalKey(tenantId, queueName);
         Channel<bool> newChannel = CreateSignalChannel();
 
         Channel<bool> actualChannel =
             _queueSignals.GetOrAdd(
-                queueName,
+                signalKey,
                 newChannel);
 
         if (ReferenceEquals(actualChannel, newChannel))
@@ -57,10 +61,12 @@ public sealed class NatsQueueSignalListener :
     }
 
     public async ValueTask<bool> WaitAsync(
+        string tenantId,
         string queueName,
         TimeSpan fallbackTimeout,
         CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
         if (fallbackTimeout <= TimeSpan.Zero)
@@ -70,12 +76,14 @@ public sealed class NatsQueueSignalListener :
                 "Fallback timeout must be greater than zero.");
         }
 
+        string signalKey = GetSignalKey(tenantId, queueName);
+
         if (!_queueSignals.TryGetValue(
-                queueName,
+                signalKey,
                 out Channel<bool>? channel))
         {
-            RegisterQueue(queueName);
-            channel = _queueSignals[queueName];
+            RegisterQueue(tenantId, queueName);
+            channel = _queueSignals[signalKey];
         }
 
         using CancellationTokenSource timeout =
@@ -135,23 +143,19 @@ public sealed class NatsQueueSignalListener :
     private async Task ConsumeAsync(
         CancellationToken cancellationToken)
     {
-        // 1. Ensure the Stream exists
-        var streamConfig = new StreamConfig("SSF_QUEUES", subjects: new[] { "ssf.queues.>" });
+        // 1. Ensure the Stream exists using wildcard covering all tenants and queues
+        var streamConfig = new StreamConfig("SSF_TENANT_QUEUES", subjects: new[] { "ssf.tenants.*.queues.>" });
         var stream = await _js.CreateStreamAsync(streamConfig, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
-        _logger.LogInformation("NATS JetStream stream 'SSF_QUEUES' verified.");
+        _logger.LogInformation("NATS JetStream stream 'SSF_TENANT_QUEUES' verified.");
 
         // 2. Perform an initial reconciliation right as the listener connects
         SignalAllQueues();
 
-        // Note: NATS handles message streaming dynamically per-queue or via a wildcards, 
-        // but since workers subscribe dynamically to specific queues as they register, 
-        // we consume globally or iterate over registered queues. 
-        // To match the exact robust pattern, we listen to all queue subjects using wildcard.
-        string subject = "ssf.queues.>";
+        string subject = "ssf.tenants.*.queues.>";
 
-        var consumerConfig = new ConsumerConfig(name: "ssf-worker-group")
+        var consumerConfig = new ConsumerConfig(name: "ssf-multitenant-worker-group")
         {
             FilterSubject = subject,
             DeliverPolicy = ConsumerConfigDeliverPolicy.New
@@ -167,20 +171,20 @@ public sealed class NatsQueueSignalListener :
             await msg.AckAsync(cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
-            // Extract queue name from subject (e.g. ssf.queues.ai-agent-queue -> ai-agent-queue)
-            string queueName = ExtractQueueName(msg.Subject);
+            // Extract tenant ID and queue name from subject (e.g. ssf.tenants.tenant-1.queues.ai-agent-queue)
+            string signalKey = ExtractSignalKey(msg.Subject);
 
-            if (!string.IsNullOrEmpty(queueName))
+            if (!string.IsNullOrEmpty(signalKey))
             {
-                SignalQueue(queueName);
+                SignalQueue(signalKey);
             }
         }
     }
 
-    private void SignalQueue(string queueName)
+    private void SignalQueue(string signalKey)
     {
         if (_queueSignals.TryGetValue(
-                queueName,
+                signalKey,
                 out Channel<bool>? channel))
         {
             channel.Writer.TryWrite(true);
@@ -195,13 +199,23 @@ public sealed class NatsQueueSignalListener :
         }
     }
 
-    private static string ExtractQueueName(string subject)
+    private static string ExtractSignalKey(string subject)
     {
-        // Subject format: ssf.queues.<queueName>
-        const string prefix = "ssf.queues.";
+        // Subject format: ssf.tenants.<tenantId>.queues.<queueName>
+        const string prefix = "ssf.tenants.";
         if (subject.StartsWith(prefix, StringComparison.Ordinal))
         {
-            return subject.Substring(prefix.Length);
+            string remainder = subject.Substring(prefix.Length);
+            int dotIdx = remainder.IndexOf(".queues.", StringComparison.Ordinal);
+            if (dotIdx > 0)
+            {
+                string tenantId = remainder.Substring(0, dotIdx);
+                string queueName = remainder.Substring(dotIdx + 8);
+                if (!string.IsNullOrEmpty(tenantId) && !string.IsNullOrEmpty(queueName))
+                {
+                    return GetSignalKey(tenantId, queueName);
+                }
+            }
         }
         return string.Empty;
     }

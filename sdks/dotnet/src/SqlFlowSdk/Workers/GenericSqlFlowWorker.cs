@@ -11,6 +11,7 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
     private readonly IServiceProvider _provider;
     private readonly SqlFlowRegistry _registry;
     private readonly ILogger<GenericSqlFlowWorker> _logger;
+    private readonly string _tenantId;
     private readonly string _queueName;
 
     public GenericSqlFlowWorker(
@@ -19,6 +20,7 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
         IServiceProvider provider,
         SqlFlowRegistry registry,
         ILogger<GenericSqlFlowWorker> logger,
+        string tenantId,
         string queueName)
     {
         _client = client;
@@ -26,19 +28,21 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
         _provider = provider;
         _registry = registry;
         _logger = logger;
+        _tenantId = tenantId;
         _queueName = queueName;
     }
 
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
-        WorkerConfiguration config = _registry.WorkerConfigs.Single(x => x.QueueName == _queueName);
+        WorkerConfiguration config = _registry.WorkerConfigs.Single(x => x.TenantId == _tenantId && x.QueueName == _queueName);
 
         _logger.LogInformation(
-            "Creating queue {Queue} if it does not exist.",
-            _queueName);
+            "Creating queue {Queue} for tenant {TenantId} if it does not exist.",
+            _queueName, _tenantId);
 
         await _client.CreateQueueAsync(
+                _tenantId,
                 _queueName,
                 stoppingToken)
             .ConfigureAwait(false);
@@ -47,8 +51,9 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
 
         WorkerOptions options = new()
         {
+            TenantId = config.TenantId,
             Queue = config.QueueName,
-            WorkerId = CreateWorkerId(config.QueueName),
+            WorkerId = CreateWorkerId(config.TenantId, config.QueueName),
             Concurrency = config.Concurrency,
             BatchSize = config.BatchSize,
             ClaimTimeout = config.ClaimTimeoutInSeconds,
@@ -56,12 +61,13 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
             OnError = config.OnError ??
                 (exception => _logger.LogError(
                     exception,
-                    "Worker error in queue {Queue}.",
-                    config.QueueName))
+                    "Worker error in queue {Queue} for tenant {TenantId}.",
+                    config.QueueName, config.TenantId))
         };
 
         _logger.LogInformation(
-            "Starting worker for queue {Queue} with concurrency {Concurrency}.",
+            "Starting worker for tenant {TenantId}, queue {Queue} with concurrency {Concurrency}.",
+            options.TenantId,
             options.Queue,
             options.Concurrency);
 
@@ -73,8 +79,9 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
 
     private async Task RegisterTasksAsync()
     {
+        string key = $"{_tenantId}:{_queueName}";
         if (!_registry.JobRegistrationsByQueue.TryGetValue(
-                _queueName,
+                key,
                 out var registrations))
         {
             return;
@@ -88,11 +95,12 @@ internal sealed class GenericSqlFlowWorker : BackgroundService
     }
 
     private static string CreateWorkerId(
+        string tenantId,
         string queueName)
     {
         string suffix = Guid.NewGuid()
             .ToString("N")[..6];
 
-        return $"worker-{queueName}-{suffix}";
+        return $"worker-{tenantId}-{queueName}-{suffix}";
     }
 }

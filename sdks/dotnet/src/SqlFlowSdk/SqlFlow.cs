@@ -34,59 +34,59 @@ public class SqlFlow : ISqlFlow, IDisposable, IAsyncDisposable
     /// <summary>
     /// Registers a task handler with the SqlFlow client. This allows the client to execute tasks of the specified type when they are claimed.
     /// </summary>
-public void RegisterTask(
-    TaskRegistrationOptions options,
-    TaskHandler handler)
-{
-    ArgumentNullException.ThrowIfNull(options);
-    ArgumentNullException.ThrowIfNull(handler);
-    ArgumentException.ThrowIfNullOrWhiteSpace(options.Name);
-
-    RegisteredTask registration = new()
+    public void RegisterTask(
+        TaskRegistrationOptions options,
+        TaskHandler handler)
     {
-        Name = options.Name,
-        DefaultMaxAttempts = options.DefaultMaxAttempts,
-        DefaultCancellation = options.DefaultCancellation,
-        Handler = handler
-    };
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.Name);
 
-    if (!_registry.TryAdd(options.Name, registration))
-    {
-        throw new InvalidOperationException($"Task '{options.Name}' is already registered.");
+        RegisteredTask registration = new()
+        {
+            Name = options.Name,
+            DefaultMaxAttempts = options.DefaultMaxAttempts,
+            DefaultCancellation = options.DefaultCancellation,
+            Handler = handler
+        };
+
+        if (!_registry.TryAdd(options.Name, registration))
+        {
+            throw new InvalidOperationException($"Task '{options.Name}' is already registered.");
+        }
     }
-}
 
     /// <summary>
     /// Creates a new queue with the specified name. Queues are used to organize tasks and determine which workers can claim 
     /// and execute them. This method must be called before spawning tasks to a new queue or claiming tasks from it.
     /// </summary>
-    public async Task CreateQueueAsync(string queueName, CancellationToken cancellationToken)
+    public async Task CreateQueueAsync(string tenantId, string queueName, CancellationToken cancellationToken)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        await _db.CreateQueueAsync(conn, queueName, cancellationToken).ConfigureAwait(false);
+        await _db.CreateQueueAsync(conn, tenantId, queueName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Drops the specified queue and all associated tasks and events. This is a destructive operation that cannot be 
     /// undone, so use with caution.
     /// </summary>
-    public async Task DropQueueAsync(string queueName, CancellationToken cancellationToken)
+    public async Task DropQueueAsync(string tenantId, string queueName, CancellationToken cancellationToken)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        await _db.DropQueueAsync(conn, queueName, cancellationToken).ConfigureAwait(false);
+        await _db.DropQueueAsync(conn, tenantId, queueName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Returns a list of all existing queues in the SqlFlow system. This can be used to discover available queues 
     /// for spawning tasks or claiming work.
     /// </summary>
-    public async Task<IEnumerable<string>> ListQueuesAsync(CancellationToken cancellationToken)
+    public async Task<IEnumerable<string>> ListQueuesAsync(string tenantId, CancellationToken cancellationToken)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        return await _db.ListQueuesAsync(conn, cancellationToken).ConfigureAwait(false);
+        return await _db.ListQueuesAsync(conn, tenantId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -113,6 +113,7 @@ public void RegisterTask(
 
         return await _db.SpawnTaskAsync(
             conn,
+            options.TenantId,
             options.Queue,
             jobName,
             JsonSerializer.Serialize(request),
@@ -135,7 +136,7 @@ public void RegisterTask(
 
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        await _db.EmitEventAsync(conn, options.Queue, eventName, JsonSerializer.Serialize(payload), cancellationToken).ConfigureAwait(false);
+        await _db.EmitEventAsync(conn, options.TenantId, options.Queue, eventName, JsonSerializer.Serialize(payload), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -147,36 +148,34 @@ public void RegisterTask(
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        await _db.CancelTaskAsync(conn, options.Queue, taskId, cancellationToken).ConfigureAwait(false);
+        await _db.CancelTaskAsync(conn, options.TenantId, options.Queue, taskId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Claims a Task from the specified queue for execution. This method is typically called by worker processes that are 
     /// polling for work.
     /// </summary>
-    public async Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1)
+    public async Task<IEnumerable<ClaimedTask>> ClaimTasksAsync(string tenantId, string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1)
     {
-        if (string.IsNullOrEmpty(queue))
-        {
-            throw new ArgumentException("Queue must be specified for claiming tasks");
-        }
+        if (string.IsNullOrEmpty(tenantId)) throw new ArgumentException("TenantId must be specified");
+        if (string.IsNullOrEmpty(queue)) throw new ArgumentException("Queue must be specified for claiming tasks");
 
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        return await _db.ClaimTasksAsync(conn, queue, workerId, claimTimeout, batchSize, cancellationToken).ConfigureAwait(false);
+        return await _db.ClaimTasksAsync(conn, tenantId, queue, workerId, claimTimeout, batchSize, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Processes a batch of claimed tasks from the specified queue. This method is typically called by worker processes that are 
     /// polling for work. It claims a batch of tasks and then executes each one using the registered handlers.
     /// </summary>
-    public async Task WorkBatchAsync(string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1)
+    public async Task WorkBatchAsync(string tenantId, string queue, string workerId, CancellationToken cancellationToken, int claimTimeout = 120, int batchSize = 1)
     {
-        IEnumerable<ClaimedTask> tasks = await ClaimTasksAsync(queue, workerId, cancellationToken, claimTimeout, batchSize).ConfigureAwait(false);
+        IEnumerable<ClaimedTask> tasks = await ClaimTasksAsync(tenantId, queue, workerId, cancellationToken, claimTimeout, batchSize).ConfigureAwait(false);
 
         foreach (ClaimedTask task in tasks)
         {
-            await ExecuteTaskAsync(task, queue, claimTimeout, cancellationToken).ConfigureAwait(false);
+            await ExecuteTaskAsync(task, tenantId, queue, claimTimeout, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -187,12 +186,14 @@ public void RegisterTask(
     /// </summary>
     public async Task ExecuteTaskAsync(
      ClaimedTask task,
+     string tenantId,
      string queue,
      int claimTimeout,
      CancellationToken stoppingToken,
      bool fatalOnLeaseTimeout = false)
     {
         ArgumentNullException.ThrowIfNull(task);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(queue);
 
         if (claimTimeout <= 0)
@@ -237,6 +238,7 @@ public void RegisterTask(
                 task.TaskId,
                 connection,
                 _db,
+                tenantId,
                 queue,
                 task,
                 claimTimeout,
@@ -270,7 +272,7 @@ public void RegisterTask(
                     await executionCts.CancelAsync().ConfigureAwait(false);
 
                     throw new FatalLeaseTimeoutException(
-                        $"Task {task.TaskName} ({task.TaskId}) exceeded " +
+                        $"Tenant {task.TenantId}, Task {task.TaskName} ({task.TaskId}) exceeded " +
                         $"the fatal lease timeout of {fatalTimeout.TotalSeconds:0} seconds.",
                         timeoutException);
                 }
@@ -289,6 +291,7 @@ public void RegisterTask(
 
             await _db.CompleteRunAsync(
                 connection,
+                tenantId,
                 queue,
                 task.RunId,
                 resultJson,
@@ -325,7 +328,8 @@ public void RegisterTask(
         {
             _logger.LogError(
                 exception,
-                "Task {TaskName} ({TaskId}), run {RunId}, failed",
+                "Tenant {TenantId}, Task {TaskName} ({TaskId}), run {RunId}, failed",
+                task.TenantId,
                 task.TaskName,
                 task.TaskId,
                 task.RunId);
@@ -350,6 +354,7 @@ public void RegisterTask(
 
                 await _db.FailRunAsync(
                     connection,
+                    tenantId,
                     queue,
                     task.RunId,
                     JsonSerializer.Serialize(failure),
@@ -360,8 +365,8 @@ public void RegisterTask(
             {
                 _logger.LogError(
                     failException,
-                    "Could not mark run {RunId} as failed",
-                    task.RunId);
+                    "Could not mark run {RunId} as failed for tenant {TenantId}",
+                    task.RunId, task.TenantId);
             }
 
             if (exception is FatalLeaseTimeoutException)
@@ -397,8 +402,9 @@ public void RegisterTask(
                 ).ConfigureAwait(false);
 
                 _logger.LogWarning(
-                    "Task {TaskName} ({TaskId}), run {RunId}, " +
+                    "Tenant {TenantId}, Task {TaskName} ({TaskId}), run {RunId}, " +
                     "exceeded its claim timeout of {ClaimTimeout} seconds",
+                    claimedTask.TenantId,
                     claimedTask.TaskName,
                     claimedTask.TaskId,
                     claimedTask.RunId,
@@ -416,14 +422,15 @@ public void RegisterTask(
     /// Returns the next available time for a task in the specified queue. This can be used to determine when a worker should 
     /// claim the next task.
     /// </summary>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The message queue to check.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(string queue, CancellationToken cancellationToken)
+    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(string tenantId, string queue, CancellationToken cancellationToken)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        return await _db.GetNextAvailableAtAsync(conn, queue, cancellationToken).ConfigureAwait(false);
+        return await _db.GetNextAvailableAtAsync(conn, tenantId, queue, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()

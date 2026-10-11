@@ -10,10 +10,11 @@ public interface IEventPublisher
     /// Emits an event to the specified queue with the given event name and payload.
     /// </summary>
     /// <typeparam name="TPayload">Type of the payload to send</typeparam>
+    /// <param name="tenantId">Tenant identifier</param>
     /// <param name="queue">Queue to publish to</param>
     /// <param name="eventName">Name of the Event being published</param>
     /// <param name="payload">Payload of the Event being published</param>
     /// <param name="cancellationToken">Cancellation Token to cancel the operation</param>
     /// <returns>An awaitable Task signalling completion</returns>
-    Task EmitEventAsync<TPayload>(string queue, string eventName, TPayload payload, CancellationToken cancellationToken);
+    Task EmitEventAsync<TPayload>(string tenantId, string queue, string eventName, TPayload payload, CancellationToken cancellationToken);
 }

@@ -4,6 +4,7 @@ CREATE SCHEMA IF NOT EXISTS ssf;
 -- FUNCTIONS & HELPERS
 -- ==========================================
 CREATE OR REPLACE FUNCTION ssf.notify_queue(
+    p_tenant_id TEXT,
     p_queue_name TEXT
 )
 RETURNS VOID
@@ -58,7 +59,7 @@ RETURNS VARCHAR(50)
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    RETURN 'main-postgres-singletable';
+    RETURN 'main-postgres-multitenant';
 END;
 $$;
 
@@ -66,7 +67,8 @@ $$;
 -- STATIC TABLE DEFINITIONS
 -- ==========================================
 CREATE TABLE IF NOT EXISTS ssf.queues (
-    queue_name VARCHAR(57) PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    queue_name VARCHAR(57) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
     storage_mode VARCHAR(50) NOT NULL DEFAULT 'unpartitioned' 
         CONSTRAINT chk_storage_mode CHECK (storage_mode IN ('unpartitioned', 'partitioned')),
@@ -83,10 +85,13 @@ CREATE TABLE IF NOT EXISTS ssf.queues (
     detach_mode VARCHAR(50) NOT NULL DEFAULT 'none' 
         CONSTRAINT chk_detach_mode CHECK (detach_mode IN ('none', 'empty')),
     detach_min_age_sec INT NOT NULL DEFAULT 2592000 -- 30 days
-        CONSTRAINT chk_detach_min_age_sec CHECK (detach_min_age_sec >= 0)
+        CONSTRAINT chk_detach_min_age_sec CHECK (detach_min_age_sec >= 0),
+        
+    PRIMARY KEY (tenant_id, queue_name)
 );
 
 CREATE TABLE IF NOT EXISTS ssf.tasks (
+    tenant_id TEXT NOT NULL,
     queue_name VARCHAR(57) NOT NULL,
     task_id UUID NOT NULL,
     task_name TEXT NOT NULL,
@@ -104,13 +109,14 @@ CREATE TABLE IF NOT EXISTS ssf.tasks (
     cancelled_at TIMESTAMPTZ,
     idempotency_key VARCHAR(450),
     
-    PRIMARY KEY (queue_name, task_id)
+    PRIMARY KEY (tenant_id, queue_name, task_id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ssf_tasks_idempotency 
-    ON ssf.tasks (queue_name, idempotency_key) WHERE idempotency_key IS NOT NULL;
+    ON ssf.tasks (tenant_id, queue_name, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ssf.runs (
+    tenant_id TEXT NOT NULL,
     queue_name VARCHAR(57) NOT NULL,
     run_id UUID NOT NULL,
     task_id UUID NOT NULL,
@@ -128,13 +134,14 @@ CREATE TABLE IF NOT EXISTS ssf.runs (
     failure_reason JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
     
-    PRIMARY KEY (queue_name, run_id)
+    PRIMARY KEY (tenant_id, queue_name, run_id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_ssf_runs_sai ON ssf.runs (queue_name, state, available_at);
-CREATE INDEX IF NOT EXISTS ix_ssf_runs_cei ON ssf.runs (queue_name, claim_expires_at) WHERE state = 'running' AND claim_expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_ssf_runs_sai ON ssf.runs (tenant_id, queue_name, state, available_at);
+CREATE INDEX IF NOT EXISTS ix_ssf_runs_cei ON ssf.runs (tenant_id, queue_name, claim_expires_at) WHERE state = 'running' AND claim_expires_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ssf.checkpoints (
+    tenant_id TEXT NOT NULL,
     queue_name VARCHAR(57) NOT NULL,
     task_id UUID NOT NULL,
     checkpoint_name VARCHAR(450) NOT NULL,
@@ -143,19 +150,21 @@ CREATE TABLE IF NOT EXISTS ssf.checkpoints (
     owner_run_id UUID,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
     
-    PRIMARY KEY (queue_name, task_id, checkpoint_name)
+    PRIMARY KEY (tenant_id, queue_name, task_id, checkpoint_name)
 );
 
 CREATE TABLE IF NOT EXISTS ssf.events (
+    tenant_id TEXT NOT NULL,
     queue_name VARCHAR(57) NOT NULL,
     event_name VARCHAR(450) NOT NULL,
     payload JSONB,
     emitted_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
     
-    PRIMARY KEY (queue_name, event_name)
+    PRIMARY KEY (tenant_id, queue_name, event_name)
 );
 
 CREATE TABLE IF NOT EXISTS ssf.waits (
+    tenant_id TEXT NOT NULL,
     queue_name VARCHAR(57) NOT NULL,
     task_id UUID NOT NULL,
     run_id UUID NOT NULL,
@@ -164,7 +173,7 @@ CREATE TABLE IF NOT EXISTS ssf.waits (
     timeout_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
     
-    PRIMARY KEY (queue_name, run_id, step_name)
+    PRIMARY KEY (tenant_id, queue_name, run_id, step_name)
 );
 
 
@@ -173,6 +182,7 @@ CREATE TABLE IF NOT EXISTS ssf.waits (
 -- ==========================================
 
 CREATE OR REPLACE PROCEDURE ssf.create_queue(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_storage_mode TEXT DEFAULT 'unpartitioned'
 )
@@ -190,8 +200,8 @@ BEGIN
     END IF;
 
     BEGIN
-        INSERT INTO ssf.queues (queue_name, storage_mode)
-        VALUES (p_queue_name, p_storage_mode);
+        INSERT INTO ssf.queues (tenant_id, queue_name, storage_mode)
+        VALUES (p_tenant_id, p_queue_name, p_storage_mode);
     EXCEPTION WHEN unique_violation THEN
         -- ON CONFLICT DO NOTHING equivalent
         NULL;
@@ -199,7 +209,7 @@ BEGIN
 
     SELECT storage_mode INTO v_existing_mode
     FROM ssf.queues
-    WHERE queue_name = p_queue_name;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
 
     IF v_existing_mode <> p_storage_mode THEN
         RAISE EXCEPTION 'Queue already exists with different storage mode.' USING ERRCODE = '50003';
@@ -208,7 +218,10 @@ END;
 $$;
 
 
-CREATE OR REPLACE PROCEDURE ssf.drop_queue(p_queue_name TEXT)
+CREATE OR REPLACE PROCEDURE ssf.drop_queue(
+    p_tenant_id TEXT,
+    p_queue_name TEXT
+)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -216,23 +229,24 @@ DECLARE
 BEGIN
     SELECT queue_name INTO v_existing_queue
     FROM ssf.queues
-    WHERE queue_name = p_queue_name;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
 
     IF v_existing_queue IS NULL THEN
         RETURN;
     END IF;
 
-    DELETE FROM ssf.waits WHERE queue_name = p_queue_name;
-    DELETE FROM ssf.events WHERE queue_name = p_queue_name;
-    DELETE FROM ssf.checkpoints WHERE queue_name = p_queue_name;
-    DELETE FROM ssf.runs WHERE queue_name = p_queue_name;
-    DELETE FROM ssf.tasks WHERE queue_name = p_queue_name;
-    DELETE FROM ssf.queues WHERE queue_name = p_queue_name;
+    DELETE FROM ssf.waits WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
+    DELETE FROM ssf.events WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
+    DELETE FROM ssf.checkpoints WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
+    DELETE FROM ssf.runs WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
+    DELETE FROM ssf.tasks WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
+    DELETE FROM ssf.queues WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name;
 END;
 $$;
 
 
 CREATE OR REPLACE FUNCTION ssf.spawn_task(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_task_name TEXT,
     p_params JSONB,
@@ -268,13 +282,13 @@ BEGIN
 
     IF v_idempotency_key IS NOT NULL THEN
         BEGIN
-            INSERT INTO ssf.tasks (queue_name, task_id, task_name, params, headers, retry_strategy, max_attempts, cancellation, enqueue_at, state, attempts, last_attempt_run, idempotency_key)
-            VALUES (p_queue_name, v_task_id, p_task_name, p_params, v_headers, v_retry_strategy, v_max_attempts, v_cancellation, v_now, 'pending', v_attempt, v_run_id, v_idempotency_key);
+            INSERT INTO ssf.tasks (tenant_id, queue_name, task_id, task_name, params, headers, retry_strategy, max_attempts, cancellation, enqueue_at, state, attempts, last_attempt_run, idempotency_key)
+            VALUES (p_tenant_id, p_queue_name, v_task_id, p_task_name, p_params, v_headers, v_retry_strategy, v_max_attempts, v_cancellation, v_now, 'pending', v_attempt, v_run_id, v_idempotency_key);
         EXCEPTION WHEN unique_violation THEN
             SELECT t.task_id, t.last_attempt_run, t.attempts 
             INTO v_existing_task_id, v_existing_run_id, v_existing_attempt
             FROM ssf.tasks t
-            WHERE t.queue_name = p_queue_name AND t.idempotency_key = v_idempotency_key;
+            WHERE t.tenant_id = p_tenant_id AND t.queue_name = p_queue_name AND t.idempotency_key = v_idempotency_key;
         END;
             
         IF v_existing_task_id IS NOT NULL THEN
@@ -282,11 +296,12 @@ BEGIN
             RETURN;
         END IF;
     ELSE
-        INSERT INTO ssf.tasks (queue_name, task_id, task_name, params, headers, retry_strategy, max_attempts, cancellation, enqueue_at, state, attempts, last_attempt_run)
-        VALUES (p_queue_name, v_task_id, p_task_name, p_params, v_headers, v_retry_strategy, v_max_attempts, v_cancellation, v_now, 'pending', v_attempt, v_run_id);
+        INSERT INTO ssf.tasks (tenant_id, queue_name, task_id, task_name, params, headers, retry_strategy, max_attempts, cancellation, enqueue_at, state, attempts, last_attempt_run)
+        VALUES (p_tenant_id, p_queue_name, v_task_id, p_task_name, p_params, v_headers, v_retry_strategy, v_max_attempts, v_cancellation, v_now, 'pending', v_attempt, v_run_id);
     END IF;
 
     INSERT INTO ssf.runs (
+        tenant_id,
         queue_name,
         run_id,
         task_id,
@@ -295,6 +310,7 @@ BEGIN
         available_at
     )
     VALUES (
+        p_tenant_id,
         p_queue_name,
         v_run_id,
         v_task_id,
@@ -303,7 +319,7 @@ BEGIN
         v_now
     );
 
-    PERFORM ssf.notify_queue(p_queue_name);
+    PERFORM ssf.notify_queue(p_tenant_id, p_queue_name);
         
     RETURN QUERY SELECT v_task_id, v_run_id, v_attempt, TRUE;
 END;
@@ -311,6 +327,7 @@ $$;
 
 
 CREATE OR REPLACE FUNCTION ssf.claim_task(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_worker_id TEXT DEFAULT 'worker',
     p_claim_timeout INT DEFAULT 30,
@@ -346,8 +363,9 @@ BEGIN
     WITH candidate AS (
         SELECT r.run_id, r.task_id, r.attempt
         FROM ssf.runs r
-        JOIN ssf.tasks t ON t.queue_name = r.queue_name AND t.task_id = r.task_id
-        WHERE r.queue_name = p_queue_name
+        JOIN ssf.tasks t ON t.tenant_id = r.tenant_id AND t.queue_name = r.queue_name AND t.task_id = r.task_id
+        WHERE r.tenant_id = p_tenant_id
+          AND r.queue_name = p_queue_name
           AND r.state IN ('pending', 'sleeping')
           AND t.state IN ('pending', 'sleeping', 'running')
           AND r.available_at <= v_now
@@ -366,30 +384,31 @@ BEGIN
         started_at = v_now,
         available_at = v_now
     FROM claimed_temp c
-    WHERE r.queue_name = p_queue_name AND r.run_id = c.run_id;
+    WHERE r.tenant_id = p_tenant_id AND r.queue_name = p_queue_name AND r.run_id = c.run_id;
 
-    -- Update  Tasks
+    -- Update Tasks
     UPDATE ssf.tasks t
     SET state = 'running',
         attempts = CASE WHEN t.attempts > c.attempt THEN t.attempts ELSE c.attempt END,
         first_started_at = COALESCE(t.first_started_at, v_now),
         last_attempt_run = c.run_id
     FROM claimed_temp c
-    WHERE t.queue_name = p_queue_name AND t.task_id = c.task_id;
+    WHERE t.tenant_id = p_tenant_id AND t.queue_name = p_queue_name AND t.task_id = c.task_id;
 
     -- Select Results
     RETURN QUERY
     SELECT c.run_id, c.task_id, c.attempt, t.task_name, t.params, t.retry_strategy, 
            t.max_attempts, t.headers, r.wake_event, r.event_payload
     FROM claimed_temp c
-    JOIN ssf.runs r ON r.queue_name = p_queue_name AND r.run_id = c.run_id
-    JOIN ssf.tasks t ON t.queue_name = p_queue_name AND t.task_id = c.task_id
+    JOIN ssf.runs r ON r.tenant_id = p_tenant_id AND r.queue_name = p_queue_name AND r.run_id = c.run_id
+    JOIN ssf.tasks t ON t.tenant_id = p_tenant_id AND t.queue_name = p_queue_name AND t.task_id = c.task_id
     ORDER BY r.available_at, c.run_id;
 END;
 $$;
 
 
 CREATE OR REPLACE PROCEDURE ssf.complete_run(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_run_id UUID,
     p_state JSONB DEFAULT NULL
@@ -402,7 +421,7 @@ DECLARE
 BEGIN
     SELECT task_id, state INTO v_task_id, v_state
     FROM ssf.runs
-    WHERE queue_name = p_queue_name AND run_id = p_run_id
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id
     FOR UPDATE;
 
     IF v_task_id IS NULL THEN
@@ -415,19 +434,20 @@ BEGIN
 
     UPDATE ssf.runs 
     SET state = 'completed', completed_at = ssf.current_time_fn(), result = p_state 
-    WHERE queue_name = p_queue_name AND run_id = p_run_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
 
     UPDATE ssf.tasks 
     SET state = 'completed', completed_payload = p_state, last_attempt_run = p_run_id 
-    WHERE queue_name = p_queue_name AND task_id = v_task_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = v_task_id;
 
     DELETE FROM ssf.waits 
-    WHERE queue_name = p_queue_name AND run_id = p_run_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
 END;
 $$;
 
 
 CREATE OR REPLACE PROCEDURE ssf.schedule_run(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_run_id UUID,
     p_wake_at TIMESTAMPTZ
@@ -448,7 +468,8 @@ BEGIN
     SELECT r.task_id
     INTO v_task_id
     FROM ssf.runs r
-    WHERE r.queue_name = p_queue_name
+    WHERE r.tenant_id = p_tenant_id
+      AND r.queue_name = p_queue_name
       AND r.run_id = p_run_id
       AND r.state = 'running'
     FOR UPDATE;
@@ -474,20 +495,21 @@ BEGIN
         available_at = v_available_at,
         wake_event = NULL,
         event_payload = NULL
-    WHERE queue_name = p_queue_name AND run_id = p_run_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
 
     UPDATE ssf.tasks
     SET state = v_new_state
-    WHERE queue_name = p_queue_name AND task_id = v_task_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = v_task_id;
 
     IF v_new_state = 'pending' THEN
-        PERFORM ssf.notify_queue(p_queue_name);
+        PERFORM ssf.notify_queue(p_tenant_id, p_queue_name);
     END IF;
 END;
 $$;
 
 
 CREATE OR REPLACE PROCEDURE ssf.fail_run(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_run_id UUID,
     p_reason JSONB,
@@ -528,7 +550,8 @@ BEGIN
         v_task_id,
         v_attempt
     FROM ssf.runs
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND run_id = p_run_id
       AND state IN ('running', 'sleeping')
     FOR UPDATE;
@@ -549,7 +572,8 @@ BEGIN
         v_first_started,
         v_cancellation
     FROM ssf.tasks
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND task_id = v_task_id
     FOR UPDATE;
 
@@ -660,11 +684,13 @@ BEGIN
         claim_expires_at = NULL,
         failed_at = v_now,
         failure_reason = p_reason
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND run_id = p_run_id;
 
     IF v_new_run_id IS NOT NULL THEN
         INSERT INTO ssf.runs (
+            tenant_id,
             queue_name,
             run_id,
             task_id,
@@ -673,6 +699,7 @@ BEGIN
             available_at
         )
         VALUES (
+            p_tenant_id,
             p_queue_name,
             v_new_run_id,
             v_task_id,
@@ -693,21 +720,24 @@ BEGIN
             cancelled_at,
             v_cancelled_at
         )
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND task_id = v_task_id;
 
     DELETE FROM ssf.waits
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND run_id = p_run_id;
 
     IF v_new_run_id IS NOT NULL
        AND v_task_state_after = 'pending' THEN
-        PERFORM ssf.notify_queue(p_queue_name);
+        PERFORM ssf.notify_queue(p_tenant_id, p_queue_name);
     END IF;
 END;
 $$;
 
 CREATE OR REPLACE PROCEDURE ssf.set_task_checkpoint_state(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_task_id UUID,
     p_step_name TEXT,
@@ -732,8 +762,8 @@ BEGIN
     SELECT r.attempt, r.state, t.state
     INTO v_new_attempt, v_run_state, v_task_state
     FROM ssf.runs r
-    JOIN ssf.tasks t ON t.queue_name = r.queue_name AND t.task_id = r.task_id
-    WHERE r.queue_name = p_queue_name AND r.run_id = p_owner_run
+    JOIN ssf.tasks t ON t.tenant_id = r.tenant_id AND t.queue_name = r.queue_name AND t.task_id = r.task_id
+    WHERE r.tenant_id = p_tenant_id AND r.queue_name = p_queue_name AND r.run_id = p_owner_run
     FOR UPDATE;
 
     IF v_new_attempt IS NULL THEN RAISE EXCEPTION 'Run not found for checkpoint' USING ERRCODE = '50010'; END IF;
@@ -742,20 +772,21 @@ BEGIN
 
     IF p_extend_claim_by IS NOT NULL AND p_extend_claim_by > 0 THEN
         UPDATE ssf.runs
-        SET claim_expires_at = v_now + (p_extend_claim_by || ' seconds')::INTERVAL;
+        SET claim_expires_at = v_now + (p_extend_claim_by || ' seconds')::INTERVAL
+        WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_owner_run;
     END IF;
 
     SELECT c.owner_run_id, r.attempt
     INTO v_existing_owner, v_existing_attempt
     FROM ssf.checkpoints c
-    LEFT JOIN ssf.runs r ON r.queue_name = c.queue_name AND r.run_id = c.owner_run_id
-    WHERE c.queue_name = p_queue_name AND c.task_id = p_task_id AND c.checkpoint_name = p_step_name
+    LEFT JOIN ssf.runs r ON r.tenant_id = c.tenant_id AND r.queue_name = c.queue_name AND r.run_id = c.owner_run_id
+    WHERE c.tenant_id = p_tenant_id AND c.queue_name = p_queue_name AND c.task_id = p_task_id AND c.checkpoint_name = p_step_name
     FOR UPDATE OF c;
 
     IF v_existing_owner IS NULL OR v_existing_attempt IS NULL OR v_new_attempt >= v_existing_attempt THEN
-        INSERT INTO ssf.checkpoints (queue_name, task_id, checkpoint_name, state, status, owner_run_id, updated_at)
-        VALUES (p_queue_name, p_task_id, p_step_name, p_state, 'committed', p_owner_run, v_now)
-        ON CONFLICT (queue_name, task_id, checkpoint_name) DO UPDATE 
+        INSERT INTO ssf.checkpoints (tenant_id, queue_name, task_id, checkpoint_name, state, status, owner_run_id, updated_at)
+        VALUES (p_tenant_id, p_queue_name, p_task_id, p_step_name, p_state, 'committed', p_owner_run, v_now)
+        ON CONFLICT (tenant_id, queue_name, task_id, checkpoint_name) DO UPDATE 
         SET state = EXCLUDED.state, status = EXCLUDED.status, owner_run_id = EXCLUDED.owner_run_id, updated_at = EXCLUDED.updated_at;
     END IF;
 END;
@@ -763,6 +794,7 @@ $$;
 
 
 CREATE OR REPLACE PROCEDURE ssf.extend_claim(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_run_id UUID,
     p_extend_by INT
@@ -782,8 +814,8 @@ BEGIN
     SELECT r.state, r.claim_expires_at, t.state
     INTO v_run_state, v_claim_expires_at, v_task_state
     FROM ssf.runs r
-    JOIN ssf.tasks t ON t.queue_name = r.queue_name AND t.task_id = r.task_id
-    WHERE r.queue_name = p_queue_name AND r.run_id = p_run_id
+    JOIN ssf.tasks t ON t.tenant_id = r.tenant_id AND t.queue_name = r.queue_name AND t.task_id = r.task_id
+    WHERE r.tenant_id = p_tenant_id AND r.queue_name = p_queue_name AND r.run_id = p_run_id
     FOR UPDATE;
 
     IF v_run_state IS NULL THEN RAISE EXCEPTION 'Run not found' USING ERRCODE = '50014'; END IF;
@@ -792,12 +824,14 @@ BEGIN
     IF v_claim_expires_at IS NULL THEN RAISE EXCEPTION 'No active claim' USING ERRCODE = '50016'; END IF;
 
     UPDATE ssf.runs
-    SET claim_expires_at = v_now + (p_extend_by || ' seconds')::INTERVAL;
+    SET claim_expires_at = v_now + (p_extend_by || ' seconds')::INTERVAL
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
 END;
 $$;
 
 
 CREATE OR REPLACE FUNCTION ssf.get_task_checkpoint_state(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_task_id UUID,
     p_step_name TEXT,
@@ -816,7 +850,8 @@ BEGIN
     RETURN QUERY
     SELECT c.checkpoint_name, c.state, c.status, c.owner_run_id, c.updated_at
     FROM ssf.checkpoints c
-    WHERE c.queue_name = p_queue_name 
+    WHERE c.tenant_id = p_tenant_id
+      AND c.queue_name = p_queue_name 
       AND c.task_id = p_task_id 
       AND c.checkpoint_name = p_step_name
       AND (p_include_pending = 1 OR c.status = 'committed');
@@ -825,6 +860,7 @@ $$;
 
 
 CREATE OR REPLACE FUNCTION ssf.get_task_checkpoint_states(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_task_id UUID,
     p_run_id UUID
@@ -844,7 +880,7 @@ DECLARE
 BEGIN
     SELECT task_id, attempt INTO v_run_task_id, v_run_attempt 
     FROM ssf.runs 
-    WHERE queue_name = p_queue_name AND run_id = p_run_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
 
     IF v_run_task_id IS NULL THEN RAISE EXCEPTION 'Run not found' USING ERRCODE = '50014'; END IF;
     IF v_run_task_id <> p_task_id THEN RAISE EXCEPTION 'Run does not belong to task mismatch' USING ERRCODE = '50017'; END IF;
@@ -852,8 +888,9 @@ BEGIN
     RETURN QUERY
     SELECT c.checkpoint_name, c.state, c.status, c.owner_run_id, c.updated_at
     FROM ssf.checkpoints c
-    LEFT JOIN ssf.runs r ON r.queue_name = c.queue_name AND r.run_id = c.owner_run_id
-    WHERE c.queue_name = p_queue_name 
+    LEFT JOIN ssf.runs r ON r.tenant_id = c.tenant_id AND r.queue_name = c.queue_name AND r.run_id = c.owner_run_id
+    WHERE c.tenant_id = p_tenant_id
+      AND c.queue_name = p_queue_name 
       AND c.task_id = p_task_id 
       AND c.status = 'committed'
       AND (r.attempt IS NULL OR r.attempt <= v_run_attempt)
@@ -863,6 +900,7 @@ $$;
 
 
 CREATE OR REPLACE FUNCTION ssf.await_event(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_task_id UUID,
     p_run_id UUID,
@@ -899,7 +937,7 @@ BEGIN
 
     SELECT state INTO v_checkpoint_payload
     FROM ssf.checkpoints
-    WHERE queue_name = p_queue_name AND task_id = p_task_id AND checkpoint_name = p_step_name;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = p_task_id AND checkpoint_name = p_step_name;
 
     IF v_checkpoint_payload IS NOT NULL THEN
         RETURN QUERY SELECT FALSE, v_checkpoint_payload;
@@ -907,28 +945,28 @@ BEGIN
     END IF;
 
     BEGIN
-        INSERT INTO ssf.events (queue_name, event_name, payload, emitted_at)
-        VALUES (p_queue_name, p_event_name, NULL, '1970-01-01');
+        INSERT INTO ssf.events (tenant_id, queue_name, event_name, payload, emitted_at)
+        VALUES (p_tenant_id, p_queue_name, p_event_name, NULL, '1970-01-01');
     EXCEPTION WHEN unique_violation THEN
         NULL;
     END;
 
-    SELECT 1 INTO v_dummy FROM ssf.events WHERE queue_name = p_queue_name AND event_name = p_event_name FOR UPDATE;
+    SELECT 1 INTO v_dummy FROM ssf.events WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND event_name = p_event_name FOR UPDATE;
 
     SELECT r.state, r.event_payload, r.wake_event, t.state
     INTO v_run_state, v_existing_payload, v_wake_event, v_task_state
     FROM ssf.runs r
-    JOIN ssf.tasks t ON t.queue_name = r.queue_name AND t.task_id = r.task_id
-    WHERE r.queue_name = p_queue_name AND r.run_id = p_run_id
+    JOIN ssf.tasks t ON t.tenant_id = r.tenant_id AND t.queue_name = r.queue_name AND t.task_id = r.task_id
+    WHERE r.tenant_id = p_tenant_id AND r.queue_name = p_queue_name AND r.run_id = p_run_id
     FOR UPDATE;
 
     IF v_run_state IS NULL THEN RAISE EXCEPTION 'Run not found' USING ERRCODE = '50014'; END IF;
     IF v_task_state = 'cancelled' THEN RAISE EXCEPTION 'Task cancelled' USING ERRCODE = '50011'; END IF;
 
-    SELECT e.payload INTO v_event_payload FROM ssf.events e WHERE e.queue_name = p_queue_name AND e.event_name = p_event_name;
+    SELECT e.payload INTO v_event_payload FROM ssf.events e WHERE e.tenant_id = p_tenant_id AND e.queue_name = p_queue_name AND e.event_name = p_event_name;
 
     IF v_existing_payload IS NOT NULL THEN
-        UPDATE ssf.runs SET event_payload = NULL WHERE queue_name = p_queue_name AND run_id = p_run_id;
+        UPDATE ssf.runs SET event_payload = NULL WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
         IF v_event_payload IS NOT NULL AND v_event_payload = v_existing_payload THEN
             v_resolved_payload := v_existing_payload;
         END IF;
@@ -941,9 +979,9 @@ BEGIN
     END IF;
 
     IF v_resolved_payload IS NOT NULL THEN
-        INSERT INTO ssf.checkpoints (queue_name, task_id, checkpoint_name, state, status, owner_run_id, updated_at)
-        VALUES (p_queue_name, p_task_id, p_step_name, v_resolved_payload, 'committed', p_run_id, v_now)
-        ON CONFLICT (queue_name, task_id, checkpoint_name) DO UPDATE 
+        INSERT INTO ssf.checkpoints (tenant_id, queue_name, task_id, checkpoint_name, state, status, owner_run_id, updated_at)
+        VALUES (p_tenant_id, p_queue_name, p_task_id, p_step_name, v_resolved_payload, 'committed', p_run_id, v_now)
+        ON CONFLICT (tenant_id, queue_name, task_id, checkpoint_name) DO UPDATE 
         SET state = EXCLUDED.state, status = EXCLUDED.status, owner_run_id = EXCLUDED.owner_run_id, updated_at = EXCLUDED.updated_at;
 
         RETURN QUERY SELECT FALSE, v_resolved_payload;
@@ -951,29 +989,30 @@ BEGIN
     END IF;
 
     IF v_resolved_payload IS NULL AND v_wake_event = p_event_name AND v_existing_payload IS NULL THEN
-        UPDATE ssf.runs SET wake_event = NULL WHERE queue_name = p_queue_name AND run_id = p_run_id;
+        UPDATE ssf.runs SET wake_event = NULL WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
         RETURN QUERY SELECT FALSE, NULL::JSONB
         RETURN;
     END IF;
 
-    INSERT INTO ssf.waits (queue_name, task_id, run_id, step_name, event_name, timeout_at, created_at)
-    VALUES (p_queue_name, p_task_id, p_run_id, p_step_name, p_event_name, v_timeout_at, v_now)
-    ON CONFLICT (queue_name, run_id, step_name) DO UPDATE 
+    INSERT INTO ssf.waits (tenant_id, queue_name, task_id, run_id, step_name, event_name, timeout_at, created_at)
+    VALUES (p_tenant_id, p_queue_name, p_task_id, p_run_id, p_step_name, p_event_name, v_timeout_at, v_now)
+    ON CONFLICT (tenant_id, queue_name, run_id, step_name) DO UPDATE 
     SET event_name = EXCLUDED.event_name, timeout_at = EXCLUDED.timeout_at, created_at = EXCLUDED.created_at;
 
     UPDATE ssf.runs
     SET state = 'sleeping', claimed_by = NULL, claim_expires_at = NULL, 
         available_at = COALESCE(v_timeout_at, '9999-12-31 23:59:59.999999+00'::TIMESTAMPTZ), 
         wake_event = p_event_name, event_payload = NULL
-    WHERE queue_name = p_queue_name AND run_id = p_run_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
 
-    UPDATE ssf.tasks SET state = 'sleeping' WHERE queue_name = p_queue_name AND task_id = p_task_id;
+    UPDATE ssf.tasks SET state = 'sleeping' WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = p_task_id;
 
     RETURN QUERY SELECT TRUE, NULL::JSONB;
 END;
 $$;
 
 CREATE OR REPLACE PROCEDURE ssf.emit_event(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_event_name TEXT,
     p_payload JSONB DEFAULT 'null'::jsonb
@@ -994,7 +1033,8 @@ BEGIN
     UPDATE ssf.events
     SET payload = v_payload,
         emitted_at = v_now
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND event_name = p_event_name
       AND payload IS NULL;
 
@@ -1003,12 +1043,14 @@ BEGIN
     IF v_emit_applied = 0 THEN
         BEGIN
             INSERT INTO ssf.events (
+                tenant_id,
                 queue_name,
                 event_name,
                 payload,
                 emitted_at
             )
             VALUES (
+                p_tenant_id,
                 p_queue_name,
                 p_event_name,
                 v_payload,
@@ -1034,7 +1076,8 @@ BEGIN
     TRUNCATE affected_runs_temp;
 
     DELETE FROM ssf.waits
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND event_name = p_event_name
       AND timeout_at IS NOT NULL
       AND timeout_at <= v_now;
@@ -1049,7 +1092,8 @@ BEGIN
         task_id,
         step_name
     FROM ssf.waits
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND event_name = p_event_name
       AND (
           timeout_at IS NULL
@@ -1072,7 +1116,8 @@ BEGIN
             claimed_by = NULL,
             claim_expires_at = NULL
         FROM affected_runs_temp a
-        WHERE r.queue_name = p_queue_name
+        WHERE r.tenant_id = p_tenant_id
+          AND r.queue_name = p_queue_name
           AND r.run_id = a.run_id
           AND r.state = 'sleeping'
         RETURNING r.run_id, r.task_id
@@ -1087,6 +1132,7 @@ BEGIN
     FROM upd;
 
     INSERT INTO ssf.checkpoints (
+        tenant_id,
         queue_name,
         task_id,
         checkpoint_name,
@@ -1096,6 +1142,7 @@ BEGIN
         updated_at
     )
     SELECT
+        p_tenant_id,
         p_queue_name,
         a.task_id,
         a.step_name,
@@ -1107,6 +1154,7 @@ BEGIN
     JOIN updated_runs_temp u
       ON a.run_id = u.run_id
     ON CONFLICT (
+        tenant_id,
         queue_name,
         task_id,
         checkpoint_name
@@ -1120,12 +1168,14 @@ BEGIN
     UPDATE ssf.tasks t
     SET state = 'pending'
     FROM updated_runs_temp u
-    WHERE t.queue_name = p_queue_name
+    WHERE t.tenant_id = p_tenant_id
+      AND t.queue_name = p_queue_name
       AND t.task_id = u.task_id;
 
     DELETE FROM ssf.waits w
     USING updated_runs_temp u
-    WHERE w.queue_name = p_queue_name
+    WHERE w.tenant_id = p_tenant_id
+      AND w.queue_name = p_queue_name
       AND w.run_id = u.run_id
       AND w.event_name = p_event_name;
 
@@ -1133,12 +1183,13 @@ BEGIN
         SELECT 1
         FROM updated_runs_temp
     ) THEN
-        PERFORM ssf.notify_queue(p_queue_name);
+        PERFORM ssf.notify_queue(p_tenant_id, p_queue_name);
     END IF;
 END;
 $$;
 
 CREATE OR REPLACE PROCEDURE ssf.cancel_task(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_task_id UUID
 )
@@ -1151,13 +1202,13 @@ DECLARE
 BEGIN
     SELECT run_id INTO v_dummy
     FROM ssf.runs
-    WHERE queue_name = p_queue_name AND task_id = p_task_id AND state NOT IN ('completed', 'failed', 'cancelled')
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = p_task_id AND state NOT IN ('completed', 'failed', 'cancelled')
     LIMIT 1
     FOR UPDATE;
 
     SELECT state INTO v_task_state
     FROM ssf.tasks
-    WHERE queue_name = p_queue_name AND task_id = p_task_id
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = p_task_id
     FOR UPDATE;
 
     IF v_task_state IS NULL THEN
@@ -1170,18 +1221,19 @@ BEGIN
 
     UPDATE ssf.tasks
     SET state = 'cancelled', cancelled_at = COALESCE(cancelled_at, v_now)
-    WHERE queue_name = p_queue_name AND task_id = p_task_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = p_task_id;
 
     UPDATE ssf.runs
     SET state = 'cancelled', claimed_by = NULL, claim_expires_at = NULL
-    WHERE queue_name = p_queue_name AND task_id = p_task_id AND state NOT IN ('completed', 'failed', 'cancelled');
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = p_task_id AND state NOT IN ('completed', 'failed', 'cancelled');
 
     DELETE FROM ssf.waits
-    WHERE queue_name = p_queue_name AND task_id = p_task_id;
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND task_id = p_task_id;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION ssf.cleanup_tasks(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_ttl_seconds INT,
     p_limit INT DEFAULT 1000
@@ -1206,8 +1258,9 @@ BEGIN
     INSERT INTO to_delete_temp (task_id)
     SELECT t.task_id
     FROM ssf.tasks t
-    LEFT JOIN ssf.runs r ON r.queue_name = t.queue_name AND r.run_id = t.last_attempt_run
-    WHERE t.queue_name = p_queue_name
+    LEFT JOIN ssf.runs r ON r.tenant_id = t.tenant_id AND r.queue_name = t.queue_name AND r.run_id = t.last_attempt_run
+    WHERE t.tenant_id = p_tenant_id
+      AND t.queue_name = p_queue_name
       AND t.state IN ('completed', 'failed', 'cancelled')
       AND (
         (t.state = 'completed' AND r.completed_at < v_cutoff) OR
@@ -1216,12 +1269,12 @@ BEGIN
       )
     LIMIT p_limit;
 
-    DELETE FROM ssf.waits w USING to_delete_temp d WHERE w.queue_name = p_queue_name AND w.task_id = d.task_id;
-    DELETE FROM ssf.checkpoints c USING to_delete_temp d WHERE c.queue_name = p_queue_name AND c.task_id = d.task_id;
-    DELETE FROM ssf.runs r USING to_delete_temp d WHERE r.queue_name = p_queue_name AND r.task_id = d.task_id;
+    DELETE FROM ssf.waits w USING to_delete_temp d WHERE w.tenant_id = p_tenant_id AND w.queue_name = p_queue_name AND w.task_id = d.task_id;
+    DELETE FROM ssf.checkpoints c USING to_delete_temp d WHERE c.tenant_id = p_tenant_id AND c.queue_name = p_queue_name AND c.task_id = d.task_id;
+    DELETE FROM ssf.runs r USING to_delete_temp d WHERE r.tenant_id = p_tenant_id AND r.queue_name = p_queue_name AND r.task_id = d.task_id;
     
     WITH del AS (
-        DELETE FROM ssf.tasks t USING to_delete_temp d WHERE t.queue_name = p_queue_name AND t.task_id = d.task_id
+        DELETE FROM ssf.tasks t USING to_delete_temp d WHERE t.tenant_id = p_tenant_id AND t.queue_name = p_queue_name AND t.task_id = d.task_id
         RETURNING 1
     )
     SELECT count(*) INTO v_deleted_count FROM del;
@@ -1231,6 +1284,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION ssf.cleanup_events(
+    p_tenant_id TEXT,
     p_queue_name TEXT,
     p_ttl_seconds INT,
     p_limit INT DEFAULT 1000
@@ -1255,12 +1309,12 @@ BEGIN
     INSERT INTO to_delete_events_temp (event_name)
     SELECT event_name
     FROM ssf.events
-    WHERE queue_name = p_queue_name AND emitted_at < v_cutoff
+    WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND emitted_at < v_cutoff
     ORDER BY emitted_at
     LIMIT p_limit;
 
     WITH del AS (
-        DELETE FROM ssf.events e USING to_delete_events_temp d WHERE e.queue_name = p_queue_name AND e.event_name = d.event_name
+        DELETE FROM ssf.events e USING to_delete_events_temp d WHERE e.tenant_id = p_tenant_id AND e.queue_name = p_queue_name AND e.event_name = d.event_name
         RETURNING 1
     )
     SELECT count(*) INTO v_deleted_count FROM del;
@@ -1270,6 +1324,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION ssf.get_next_available_at(
+    p_tenant_id TEXT,
     p_queue_name TEXT
 )
 RETURNS TIMESTAMPTZ
@@ -1281,7 +1336,8 @@ BEGIN
     SELECT available_at
     INTO v_next_available
     FROM ssf.runs
-    WHERE queue_name = p_queue_name
+    WHERE tenant_id = p_tenant_id
+      AND queue_name = p_queue_name
       AND state IN ('pending', 'sleeping')
     ORDER BY available_at ASC
     LIMIT 1;

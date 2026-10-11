@@ -19,6 +19,11 @@ public class WorkerOptions
     public required string WorkerId { get; set; }
 
     /// <summary>
+    /// The tenant this worker belongs to. This ensures the worker only polls tasks for a specific tenant isolation boundary.
+    /// </summary>
+    public required string TenantId { get; set; }
+
+    /// <summary>
     /// The queue this worker will poll for tasks to claim and execute. This must match the queue specified 
     /// in the RegisteredTask for the tasks that this worker is intended to execute. The worker will only 
     /// claim tasks from this queue.

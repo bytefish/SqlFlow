@@ -3,7 +3,7 @@
 -- ==========================================
 -- Run this script AFTER ssf-sqlserver-minimal.sql to enable Service Broker signaling.
 -- It defines the necessary message types, contracts, queues, and services, 
--- and overrides the stub notify function to send real messages.
+-- and overrides the stub notify function to send real messages including tenant information.
 
 IF NOT EXISTS (SELECT 1 FROM sys.service_message_types WHERE name = 'ssf_NotificationMessage')
 BEGIN
@@ -30,13 +30,18 @@ END
 GO
 
 CREATE OR ALTER PROCEDURE ssf.notify_workers
+    @p_tenant_id NVARCHAR(128),
     @p_queue_name NVARCHAR(57),
     @p_event NVARCHAR(50) = 'event'
 AS
 BEGIN
     SET NOCOUNT ON;
     DECLARE @dlg UNIQUEIDENTIFIER;
-    DECLARE @msg NVARCHAR(MAX) = N'{"queue":"' + @p_queue_name + N'","event":"' + @p_event + N'"}';
+    
+    -- Constructing JSON payload including tenant_id
+    DECLARE @msg NVARCHAR(MAX) = N'{"tenant_id":"' + STRING_ESCAPE(@p_tenant_id, 'json') + 
+                                 N'","queue":"' + STRING_ESCAPE(@p_queue_name, 'json') + 
+                                 N'","event":"' + STRING_ESCAPE(@p_event, 'json') + N'"}';
 
     BEGIN DIALOG @dlg
         FROM SERVICE [ssf_NotificationService]

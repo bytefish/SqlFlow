@@ -27,13 +27,14 @@ public class SqlFlowEventPublisher : IEventPublisher
     /// Asynchronously emits an event with the specified payload to the given queue.
     /// </summary>
     /// <typeparam name="TPayload">The type of the payload to include with the event.</typeparam>
+    /// <param name="tenantId">The Tenant ID.</param>
     /// <param name="queue">The name of the queue to which the event will be emitted. Cannot be null or empty.</param>
     /// <param name="eventName">The name of the event to emit. Cannot be null or empty.</param>
     /// <param name="payload">The payload data to include with the event.</param>
     /// <param name="cancellationToken">A token to monitor for cancellation requests.</param>
     /// <returns>A task that represents the asynchronous emit operation.</returns>
-    public async Task EmitEventAsync<TPayload>(string queue, string eventName, TPayload payload, CancellationToken cancellationToken)
+    public async Task EmitEventAsync<TPayload>(string tenantId, string queue, string eventName, TPayload payload, CancellationToken cancellationToken)
     {
-        await _client.EmitEventAsync(new EmitEventOptions { Queue = queue }, eventName, payload, cancellationToken);
+        await _client.EmitEventAsync(new EmitEventOptions { TenantId = tenantId, Queue = queue }, eventName, payload, cancellationToken);
     }
 }

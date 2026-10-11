@@ -17,19 +17,18 @@ public class PostgresFlowIntegrationTests
     private static string ConnectionString = null!;
 
     [AssemblyInitialize]
-    public static async Task AssemblyInitializeAsync(
-        TestContext context)
+    public static async Task AssemblyInitializeAsync(TestContext context)
     {
         await DockerContainers.StartAllContainersAsync();
 
-        ConnectionString =
-            DockerContainers.PostgresContainer.GetConnectionString();
+        ConnectionString = DockerContainers.PostgresContainer.GetConnectionString();
     }
 
     [TestMethod]
     public async Task Test_BasicTaskExecution_Flow()
     {
         // Arrange
+        const string tenantId = "tenant-alpha";
         const string queueName = "test-queue";
         const string taskName = "add-numbers";
 
@@ -69,6 +68,7 @@ public class PostgresFlowIntegrationTests
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
         await client.CreateQueueAsync(
+            tenantId,
             queueName,
             CancellationToken.None);
 
@@ -105,6 +105,7 @@ public class PostgresFlowIntegrationTests
         var workerOptions =
             new WorkerOptions
             {
+                TenantId = tenantId,
                 Queue = queueName,
                 Concurrency = 1,
                 WorkerId =
@@ -136,6 +137,7 @@ public class PostgresFlowIntegrationTests
             await client.SpawnAsync(
                 new SpawnOptions
                 {
+                    TenantId = tenantId,
                     Queue = queueName
                 },
                 taskName,
@@ -151,9 +153,9 @@ public class PostgresFlowIntegrationTests
              * PostgreSQL NOTIFY and wakes the dispatcher.
              *
              * This test injects a controllable signal listener and
-             * triggers the wake-up explicitly.
+             * triggers the wake-up explicitly using tenant and queue.
              */
-            signalListener.Signal(queueName);
+            signalListener.Signal(tenantId, queueName);
 
             int result;
 
@@ -201,16 +203,20 @@ public class PostgresFlowIntegrationTests
             Channel<bool>> _queueSignals =
                 new(StringComparer.Ordinal);
 
-        public void RegisterQueue(string queueName)
+        private static string GetSignalKey(string tenantId, string queueName) => $"{tenantId}:{queueName}";
+
+        public void RegisterQueue(string tenantId, string queueName)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
+            string signalKey = GetSignalKey(tenantId, queueName);
             Channel<bool> newChannel =
                 CreateChannel();
 
             Channel<bool> actualChannel =
                 _queueSignals.GetOrAdd(
-                    queueName,
+                    signalKey,
                     newChannel);
 
             if (ReferenceEquals(
@@ -229,10 +235,12 @@ public class PostgresFlowIntegrationTests
         }
 
         public async ValueTask<bool> WaitAsync(
+            string tenantId,
             string queueName,
             TimeSpan fallbackTimeout,
             CancellationToken cancellationToken)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
             if (fallbackTimeout <= TimeSpan.Zero)
@@ -242,13 +250,15 @@ public class PostgresFlowIntegrationTests
                     "The fallback timeout must be greater than zero.");
             }
 
+            string signalKey = GetSignalKey(tenantId, queueName);
+
             if (!_queueSignals.TryGetValue(
-                    queueName,
+                    signalKey,
                     out Channel<bool>? channel))
             {
-                RegisterQueue(queueName);
+                RegisterQueue(tenantId, queueName);
 
-                channel = _queueSignals[queueName];
+                channel = _queueSignals[signalKey];
             }
 
             using CancellationTokenSource timeoutCancellation =
@@ -277,17 +287,20 @@ public class PostgresFlowIntegrationTests
             }
         }
 
-        public void Signal(string queueName)
+        public void Signal(string tenantId, string queueName)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
             ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
+            string signalKey = GetSignalKey(tenantId, queueName);
+
             if (!_queueSignals.TryGetValue(
-                    queueName,
+                    signalKey,
                     out Channel<bool>? channel))
             {
-                RegisterQueue(queueName);
+                RegisterQueue(tenantId, queueName);
 
-                channel = _queueSignals[queueName];
+                channel = _queueSignals[signalKey];
             }
 
             /*

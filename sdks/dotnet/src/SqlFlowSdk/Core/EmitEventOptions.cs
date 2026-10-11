@@ -10,6 +10,12 @@ namespace SqlFlowSdk.Core;
 public class EmitEventOptions
 {
     /// <summary>
+    /// Tenant to which the event should be emitted. Required for multi-tenancy isolation.
+    /// </summary>
+    [JsonPropertyName("tenant_id")]
+    public required string TenantId { get; set; }
+
+    /// <summary>
     /// Queue to which the event should be emitted. This must match the queue that handlers are listening 
     /// on for this event. The event will be delivered to all handlers that are registered to listen for 
     /// it on the specified queue.

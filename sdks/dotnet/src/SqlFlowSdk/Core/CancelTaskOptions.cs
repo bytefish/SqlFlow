@@ -10,6 +10,12 @@ namespace SqlFlowSdk.Core;
 public class CancelTaskOptions
 {
     /// <summary>
+    /// Tenant that the task belongs to. Required for multi-tenancy isolation.
+    /// </summary>
+    [JsonPropertyName("tenant_id")]
+    public required string TenantId { get; set; }
+
+    /// <summary>
     /// Queue that the task belongs to. This is required to identify which queue the task is in, so the system can locate and 
     /// cancel the correct task. The queue must match the one specified when the task was spawned.
     /// </summary>

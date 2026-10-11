@@ -19,10 +19,11 @@ public class SqlFlowRegistry
     public Dictionary<string, (Type JobType, string Queue)> Routes { get; } = new();
 
     /// <summary>
-    /// Gets the collection of job registrations grouped by queue name.
+    /// Gets the collection of job registrations grouped by a combination of TenantId and QueueName.
+    /// The Key format used is $"{tenantId}:{queueName}".
     /// </summary>
-    /// <remarks>Each key in the dictionary represents a queue name, and the associated value is a list of job
-    /// registration delegates for that queue. The delegates define the logic to execute a job, accepting an
+    /// <remarks>Each key in the dictionary represents a tenant-queue combo, and the associated value is a list of job
+    /// registration delegates for that scope. The delegates define the logic to execute a job, accepting an
     /// implementation of ISqlFlow, an IServiceProvider for dependency resolution, and returning a Task representing the
     /// asynchronous operation.</remarks>
     public Dictionary<string, List<Func<ISqlFlow, IServiceProvider, Task>>> JobRegistrationsByQueue { get; } = new();

@@ -11,16 +11,18 @@ public class SqlFlowWorkerBuilder
     private readonly IServiceCollection _services;
     private readonly SqlFlowRegistry _registry;
     private readonly WorkerConfiguration _workerConfig;
+    private readonly string _registryKey;
 
     public SqlFlowWorkerBuilder(IServiceCollection services, SqlFlowRegistry registry, WorkerConfiguration workerConfig)
     {
         _services = services;
         _registry = registry;
         _workerConfig = workerConfig;
+        _registryKey = $"{_workerConfig.TenantId}:{_workerConfig.QueueName}";
 
-        if (!_registry.JobRegistrationsByQueue.ContainsKey(_workerConfig.QueueName))
+        if (!_registry.JobRegistrationsByQueue.ContainsKey(_registryKey))
         {
-            _registry.JobRegistrationsByQueue[_workerConfig.QueueName] = new();
+            _registry.JobRegistrationsByQueue[_registryKey] = new();
         }
     }
 
@@ -65,7 +67,7 @@ public class SqlFlowWorkerBuilder
 
         _registry.Routes[options.Name] = (typeof(TJob), _workerConfig.QueueName);
 
-        _registry.JobRegistrationsByQueue[_workerConfig.QueueName].Add((client, provider) =>
+        _registry.JobRegistrationsByQueue[_registryKey].Add((client, provider) =>
         {
             client.UseJob<TJob, TRequest, TResult>(provider, options.Name, options.MaxAttempts);
             return Task.CompletedTask;

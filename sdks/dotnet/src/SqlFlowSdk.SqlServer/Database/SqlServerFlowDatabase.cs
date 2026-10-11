@@ -13,37 +13,36 @@ namespace SqlFlowSdk.SqlServer.Database;
 
 /// <summary>
 /// Encapsulates all raw database interactions. It is used to perform all the necessary operations on the database to 
-/// manage queues, tasks, checkpoints, and events in the SqlFlow system using SQL Server.
-/// </summary>
-/// <summary>
-/// Encapsulates all raw database interactions. It is used to perform all the necessary operations on the database to 
-/// manage queues, tasks, checkpoints, and events in the SqlFlow system using SQL Server.
+/// manage queues, tasks, checkpoints, and events in the SqlFlow system using SQL Server with multi-tenant support.
 /// </summary>
 public class SqlServerFlowDatabase : ISqlFlowDatabase
 {
-    public async Task CreateQueueAsync(DbConnection conn, string queueName, CancellationToken cancellationToken)
+    public async Task CreateQueueAsync(DbConnection conn, string tenantId, string queueName, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.create_queue", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queueName);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task DropQueueAsync(DbConnection conn, string queueName, CancellationToken cancellationToken)
+    public async Task DropQueueAsync(DbConnection conn, string tenantId, string queueName, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.drop_queue", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queueName);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<List<string>> ListQueuesAsync(DbConnection conn, CancellationToken cancellationToken)
+    public async Task<List<string>> ListQueuesAsync(DbConnection conn, string tenantId, CancellationToken cancellationToken)
     {
         List<string> results = new();
 
-        using SqlCommand cmd = new("SELECT queue_name FROM ssf.queues ORDER BY queue_name", (SqlConnection)conn);
+        using SqlCommand cmd = new("SELECT queue_name FROM ssf.queues WHERE tenant_id = @tenant_id ORDER BY queue_name", (SqlConnection)conn);
+        AddParam(cmd, "@tenant_id", tenantId);
 
         using SqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -54,10 +53,11 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         return results;
     }
 
-    public async Task<SpawnResult> SpawnTaskAsync(DbConnection conn, string queue, string taskName, string paramsJson, string optionsJson, CancellationToken cancellationToken)
+    public async Task<SpawnResult> SpawnTaskAsync(DbConnection conn, string tenantId, string queue, string taskName, string paramsJson, string optionsJson, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.spawn_task", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_task_name", taskName);
         AddParam(cmd, "@p_params", paramsJson);
@@ -69,6 +69,7 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         {
             return new SpawnResult
             {
+                TenantId = tenantId,
                 TaskId = reader.GetGuid(0).ToString(),
                 RunId = reader.GetGuid(1).ToString(),
                 Attempt = reader.GetInt32(2)
@@ -77,20 +78,22 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         throw new Exception("Failed to spawn task");
     }
 
-    public async Task CancelTaskAsync(DbConnection conn, string queue, string taskId, CancellationToken cancellationToken)
+    public async Task CancelTaskAsync(DbConnection conn, string tenantId, string queue, string taskId, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.cancel_task", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task EmitEventAsync(DbConnection conn, string queue, string eventName, string payloadJson, CancellationToken cancellationToken)
+    public async Task EmitEventAsync(DbConnection conn, string tenantId, string queue, string eventName, string payloadJson, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.emit_event", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_event_name", eventName);
         AddParam(cmd, "@p_payload", payloadJson);
@@ -98,12 +101,13 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<List<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken)
+    public async Task<List<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string tenantId, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken)
     {
         List<ClaimedTask> tasks = new();
 
         using SqlCommand cmd = new("ssf.claim_task", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_worker_id", workerId);
         AddParam(cmd, "@p_claim_timeout", timeout);
@@ -115,6 +119,7 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         {
             tasks.Add(new ClaimedTask
             {
+                TenantId = tenantId,
                 RunId = reader.GetGuid(0).ToString(),
                 TaskId = reader.GetGuid(1).ToString(),
                 Attempt = reader.GetInt32(2),
@@ -131,10 +136,11 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         return tasks;
     }
 
-    public async Task CompleteRunAsync(DbConnection conn, string queue, string runId, string resultJson, CancellationToken cancellationToken)
+    public async Task CompleteRunAsync(DbConnection conn, string tenantId, string queue, string runId, string resultJson, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.complete_run", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_run_id", Guid.Parse(runId));
         AddParam(cmd, "@p_state", resultJson);
@@ -142,24 +148,26 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task FailRunAsync(DbConnection conn, string queue, string runId, string errorJson, CancellationToken cancellationToken)
+    public async Task FailRunAsync(DbConnection conn, string tenantId, string queue, string runId, string errorJson, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.fail_run", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_run_id", Guid.Parse(runId));
         AddParam(cmd, "@p_reason", errorJson);
-        AddParam(cmd, "@p_retry_at", DBNull.Value); // Kann optional als DateTimeOffset übergeben werden
+        AddParam(cmd, "@p_retry_at", DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<List<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string queue, string taskId, string runId, CancellationToken cancellationToken)
+    public async Task<List<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string tenantId, string queue, string taskId, string runId, CancellationToken cancellationToken)
     {
         List<CheckpointRow> rows = new();
 
         using SqlCommand cmd = new("ssf.get_task_checkpoint_states", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
         AddParam(cmd, "@p_run_id", Guid.Parse(runId));
@@ -170,6 +178,7 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         {
             rows.Add(new CheckpointRow
             {
+                TenantId = tenantId,
                 CheckpointName = reader.GetString(0),
                 State = ParseJson(reader, 1),
                 Status = reader.GetString(2),
@@ -181,10 +190,11 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         return rows;
     }
 
-    public async Task<JsonNode?> GetSingleCheckpointAsync(DbConnection conn, string queue, string taskId, string checkpointName, CancellationToken cancellationToken)
+    public async Task<JsonNode?> GetSingleCheckpointAsync(DbConnection conn, string tenantId, string queue, string taskId, string checkpointName, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.get_task_checkpoint_state", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
         AddParam(cmd, "@p_step_name", checkpointName);
@@ -200,12 +210,13 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         return null;
     }
 
-    public async Task PersistCheckpointAsync(DbConnection conn, string queue, string taskId, string runId, string checkpointName, string stateJson, int timeout, CancellationToken cancellationToken)
+    public async Task PersistCheckpointAsync(DbConnection conn, string tenantId, string queue, string taskId, string runId, string checkpointName, string stateJson, int timeout, CancellationToken cancellationToken)
     {
         await ExecuteWithCancelCheckAsync(async (ct) =>
         {
             using SqlCommand cmd = new("ssf.set_task_checkpoint_state", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+            AddParam(cmd, "@p_tenant_id", tenantId);
             AddParam(cmd, "@p_queue_name", queue);
             AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
             AddParam(cmd, "@p_step_name", checkpointName);
@@ -217,10 +228,11 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         }, cancellationToken);
     }
 
-    public async Task ScheduleRunAsync(DbConnection conn, string queue, string runId, DateTime wakeAt, CancellationToken cancellationToken)
+    public async Task ScheduleRunAsync(DbConnection conn, string tenantId, string queue, string runId, DateTime wakeAt, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.schedule_run", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_run_id", Guid.Parse(runId));
         AddParam(cmd, "@p_wake_at", new DateTimeOffset(wakeAt, TimeSpan.Zero));
@@ -228,12 +240,13 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task HeartbeatAsync(DbConnection conn, string queue, string runId, int seconds, CancellationToken cancellationToken)
+    public async Task HeartbeatAsync(DbConnection conn, string tenantId, string queue, string runId, int seconds, CancellationToken cancellationToken)
     {
         await ExecuteWithCancelCheckAsync(async (ct) =>
         {
             using SqlCommand cmd = new("ssf.extend_claim", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+            AddParam(cmd, "@p_tenant_id", tenantId);
             AddParam(cmd, "@p_queue_name", queue);
             AddParam(cmd, "@p_run_id", Guid.Parse(runId));
             AddParam(cmd, "@p_extend_by", seconds);
@@ -242,12 +255,13 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         }, cancellationToken);
     }
 
-    public async Task<(bool ShouldSuspend, JsonNode? Payload)> AwaitEventAsync(DbConnection conn, string queue, string taskId, string runId, string checkpointName, string eventName, int? timeout, CancellationToken cancellationToken)
+    public async Task<(bool ShouldSuspend, JsonNode? Payload)> AwaitEventAsync(DbConnection conn, string tenantId, string queue, string taskId, string runId, string checkpointName, string eventName, int? timeout, CancellationToken cancellationToken)
     {
         return await ExecuteWithCancelCheckAsync(async (ct) =>
         {
             using SqlCommand cmd = new("ssf.await_event", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+            AddParam(cmd, "@p_tenant_id", tenantId);
             AddParam(cmd, "@p_queue_name", queue);
             AddParam(cmd, "@p_task_id", Guid.Parse(taskId));
             AddParam(cmd, "@p_run_id", Guid.Parse(runId));
@@ -269,10 +283,11 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         }, cancellationToken);
     }
 
-    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string queue, CancellationToken cancellationToken)
+    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string tenantId, string queue, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.get_next_available_at", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
 
         object? result = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -285,23 +300,25 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         return null;
     }
 
-    public async Task ReleaseWorkerClaimsAsync(DbConnection conn, string queue, string workerId, CancellationToken cancellationToken)
+    public async Task ReleaseWorkerClaimsAsync(DbConnection conn, string tenantId, string queue, string workerId, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.release_worker_claims", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
+        AddParam(cmd, "@p_tenant_id", tenantId);
         AddParam(cmd, "@p_queue_name", queue);
         AddParam(cmd, "@p_worker_id", workerId);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<int> CleanupTasksAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
+    public async Task<int> CleanupTasksAsync(DbConnection conn, string tenantId, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.cleanup_tasks", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
-        AddParam(cmd, "@queue", queue);
-        AddParam(cmd, "@ttl", ttlSeconds);
-        AddParam(cmd, "@limit", limit);
+        AddParam(cmd, "@p_tenant_id", tenantId);
+        AddParam(cmd, "@p_queue_name", queue);
+        AddParam(cmd, "@p_ttl_seconds", ttlSeconds);
+        AddParam(cmd, "@p_limit", limit);
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -312,13 +329,14 @@ public class SqlServerFlowDatabase : ISqlFlowDatabase
         return 0;
     }
 
-    public async Task<int> CleanupEventsAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
+    public async Task<int> CleanupEventsAsync(DbConnection conn, string tenantId, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
     {
         using SqlCommand cmd = new("ssf.cleanup_events", (SqlConnection)conn) { CommandType = CommandType.StoredProcedure };
 
-        AddParam(cmd, "@queue", queue);
-        AddParam(cmd, "@ttl", ttlSeconds);
-        AddParam(cmd, "@limit", limit);
+        AddParam(cmd, "@p_tenant_id", tenantId);
+        AddParam(cmd, "@p_queue_name", queue);
+        AddParam(cmd, "@p_ttl_seconds", ttlSeconds);
+        AddParam(cmd, "@p_limit", limit);
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 

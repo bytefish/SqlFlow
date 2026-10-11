@@ -13,6 +13,12 @@ namespace SqlFlowSdk.Core;
 public class CheckpointRow
 {
     /// <summary>
+    /// Tenant that the checkpoint belongs to.
+    /// </summary>
+    [JsonPropertyName("tenant_id")]
+    public required string TenantId { get; set; }
+
+    /// <summary>
     /// Name of the checkpoint. This is used to identify different checkpoints within the same task and run. It must be 
     /// unique for each checkpoint within the same task and run, but can be reused across different tasks and runs.
     /// </summary>

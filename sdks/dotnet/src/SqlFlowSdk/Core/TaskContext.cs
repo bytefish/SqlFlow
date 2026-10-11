@@ -33,6 +33,7 @@ public class TaskContext
     private readonly DbConnection _connection;
     private readonly ISqlFlowDatabase _db;
 
+    private readonly string _tenantId;
     private readonly string _queueName;
     private readonly ClaimedTask _task;
     private readonly Dictionary<string, JsonNode?> _checkpointCache;
@@ -42,6 +43,7 @@ public class TaskContext
         ILogger logger,
         DbConnection connection,
         ISqlFlowDatabase database,
+        string tenantId,
         string queueName,
         ClaimedTask task,
         Dictionary<string, JsonNode?> checkpoints,
@@ -51,6 +53,7 @@ public class TaskContext
         _logger = logger;
         _connection = connection;
         _db = database;
+        _tenantId = tenantId;
         _queueName = queueName;
         _task = task;
         _checkpointCache = checkpoints;
@@ -65,12 +68,13 @@ public class TaskContext
         string taskId,
         DbConnection con,
         ISqlFlowDatabase db,
+        string tenantId,
         string queueName,
         ClaimedTask task,
         int claimTimeout,
         CancellationToken cancellationToken)
     {
-        IEnumerable<CheckpointRow> checkpoints = await db.GetCheckpointStatesAsync(con, queueName, task.TaskId, task.RunId, cancellationToken).ConfigureAwait(false);
+        IEnumerable<CheckpointRow> checkpoints = await db.GetCheckpointStatesAsync(con, tenantId, queueName, task.TaskId, task.RunId, cancellationToken).ConfigureAwait(false);
 
         Dictionary<string, JsonNode?> cache = new Dictionary<string, JsonNode?>();
 
@@ -79,7 +83,7 @@ public class TaskContext
             cache[cp.CheckpointName] = cp.State;
         }
 
-        return new TaskContext(logger, con, db, queueName, task, cache, claimTimeout, cancellationToken);
+        return new TaskContext(logger, con, db, tenantId, queueName, task, cache, claimTimeout, cancellationToken);
     }
 
     public async Task<T> Step<T>(string name, Func<Task<T>> fn)
@@ -100,7 +104,7 @@ public class TaskContext
 
         string rvString = rvJson?.ToJsonString() ?? "null";
 
-        await _db.PersistCheckpointAsync(_connection, _queueName, _task.TaskId, _task.RunId, checkpointName, rvString, _claimTimeout, CancellationToken).ConfigureAwait(false);
+        await _db.PersistCheckpointAsync(_connection, _tenantId, _queueName, _task.TaskId, _task.RunId, checkpointName, rvString, _claimTimeout, CancellationToken).ConfigureAwait(false);
 
         _checkpointCache[checkpointName] = rvJson;
 
@@ -143,13 +147,13 @@ public class TaskContext
         {
             // Persist the wake time as the state
             string wakeString = JsonSerializer.Serialize(wakeAt);
-            await _db.PersistCheckpointAsync(_connection, _queueName, _task.TaskId, _task.RunId, checkpointName, wakeString, _claimTimeout, CancellationToken).ConfigureAwait(false);
+            await _db.PersistCheckpointAsync(_connection, _tenantId, _queueName, _task.TaskId, _task.RunId, checkpointName, wakeString, _claimTimeout, CancellationToken).ConfigureAwait(false);
             _checkpointCache[checkpointName] = JsonValue.Create(wakeAt);
         }
 
         if (DateTime.UtcNow < actualWakeAt)
         {
-            await _db.ScheduleRunAsync(_connection, _queueName, _task.RunId, actualWakeAt, CancellationToken).ConfigureAwait(false);
+            await _db.ScheduleRunAsync(_connection, _tenantId, _queueName, _task.RunId, actualWakeAt, CancellationToken).ConfigureAwait(false);
 
             throw new SuspendTaskException();
         }
@@ -174,7 +178,7 @@ public class TaskContext
             return cached;
         }
 
-        JsonNode? state = await _db.GetSingleCheckpointAsync(_connection, _queueName, _task.TaskId, checkpointName, CancellationToken).ConfigureAwait(false);
+        JsonNode? state = await _db.GetSingleCheckpointAsync(_connection, _tenantId, _queueName, _task.TaskId, checkpointName, CancellationToken).ConfigureAwait(false);
 
         if (state != null)
         {
@@ -188,7 +192,7 @@ public class TaskContext
 
     public async Task<JsonNode> AwaitEvent(string eventName, string? stepName = null, double? timeoutSeconds = null)
     {
-         stepName ??= $"$awaitEvent:{eventName}";
+        stepName ??= $"$awaitEvent:{eventName}";
         int? timeout = timeoutSeconds.HasValue ? (int)Math.Floor(timeoutSeconds.Value) : null;
 
         string checkpointName = GetCheckpointName(stepName);
@@ -204,7 +208,7 @@ public class TaskContext
             throw new TimeoutErrorException($"Timed out waiting for event \"{eventName}\"");
         }
 
-        (bool ShouldSuspend, JsonNode? Payload) result = await _db.AwaitEventAsync(_connection, _queueName, _task.TaskId, _task.RunId, checkpointName, eventName, timeout, CancellationToken).ConfigureAwait(false);
+        (bool ShouldSuspend, JsonNode? Payload) result = await _db.AwaitEventAsync(_connection, _tenantId, _queueName, _task.TaskId, _task.RunId, checkpointName, eventName, timeout, CancellationToken).ConfigureAwait(false);
 
         if (!result.ShouldSuspend)
         {
@@ -218,7 +222,7 @@ public class TaskContext
 
     public async Task Heartbeat(int? seconds = null)
     {
-        await _db.HeartbeatAsync(_connection, _queueName, _task.RunId, seconds ?? _claimTimeout, CancellationToken).ConfigureAwait(false);
+        await _db.HeartbeatAsync(_connection, _tenantId, _queueName, _task.RunId, seconds ?? _claimTimeout, CancellationToken).ConfigureAwait(false);
     }
 
     public async Task EmitEvent(string eventName, JsonNode? payload = null)
@@ -228,6 +232,6 @@ public class TaskContext
             throw new ArgumentException("eventName must be a non-empty string");
         }
 
-        await _db.EmitEventAsync(_connection, _queueName, eventName, payload?.ToJsonString() ?? "null", CancellationToken).ConfigureAwait(false);
+        await _db.EmitEventAsync(_connection, _tenantId, _queueName, eventName, payload?.ToJsonString() ?? "null", CancellationToken).ConfigureAwait(false);
     }
 }

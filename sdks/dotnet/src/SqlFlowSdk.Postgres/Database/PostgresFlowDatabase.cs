@@ -15,29 +15,34 @@ namespace SqlFlowSdk.Database;
 /// </summary>
 public class PostgresFlowDatabase : ISqlFlowDatabase
 {
-    public async Task CreateQueueAsync(DbConnection conn, string queueName, CancellationToken cancellationToken)
-    {
-        using NpgsqlCommand cmd = new("CALL ssf.create_queue(@p_queue_name, 'unpartitioned')", (NpgsqlConnection)conn);
 
+    public async Task CreateQueueAsync(DbConnection conn, string tenantId, string queueName, CancellationToken cancellationToken)
+    {
+        using NpgsqlCommand cmd = new("CALL ssf.create_queue(@p_tenant_id, @p_queue_name, 'unpartitioned')", (NpgsqlConnection)conn);
+
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queueName);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task DropQueueAsync(DbConnection conn, string queueName, CancellationToken cancellationToken)
+    public async Task DropQueueAsync(DbConnection conn, string tenantId, string queueName, CancellationToken cancellationToken)
     {
-        using NpgsqlCommand cmd = new("CALL ssf.drop_queue(@p_queue_name)", (NpgsqlConnection)conn);
+        using NpgsqlCommand cmd = new("CALL ssf.drop_queue(@p_tenant_id, @p_queue_name)", (NpgsqlConnection)conn);
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queueName);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<List<string>> ListQueuesAsync(DbConnection conn, CancellationToken cancellationToken)
+    public async Task<List<string>> ListQueuesAsync(DbConnection conn, string tenantId, CancellationToken cancellationToken)
     {
         List<string> results = new();
 
-        await using NpgsqlCommand cmd = CreateCommand(conn, "SELECT queue_name FROM ssf.queues ORDER BY queue_name");
+        await using NpgsqlCommand cmd = CreateCommand(conn, "SELECT queue_name FROM ssf.queues WHERE tenant_id = @p_tenant_id ORDER BY queue_name");
+
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
 
         using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -48,13 +53,14 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         return results;
     }
 
-    public async Task<SpawnResult> SpawnTaskAsync(DbConnection conn, string queue, string taskName, string paramsJson, string optionsJson, CancellationToken cancellationToken)
+
+    public async Task<SpawnResult> SpawnTaskAsync(DbConnection conn, string tenantId, string queue, string taskName, string paramsJson, string optionsJson, CancellationToken cancellationToken)
     {
-        // We cast parameters to jsonb inside the SQL string so PostgreSQL parses the text correctly
-        string sql = "SELECT task_id, run_id, attempt FROM ssf.spawn_task(@p_queue_name, @p_task_name, @p_params::jsonb, @p_options::jsonb)";
+        string sql = "SELECT task_id, run_id, attempt FROM ssf.spawn_task(@p_tenant_id, @p_queue_name, @p_task_name, @p_params::jsonb, @p_options::jsonb)";
 
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_task_name", NpgsqlDbType.Text, taskName);
         AddParam(cmd, "@p_params", NpgsqlDbType.Jsonb, paramsJson);
@@ -66,6 +72,7 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         {
             return new SpawnResult
             {
+                TenantId = tenantId,
                 TaskId = reader.GetGuid(0).ToString(),
                 RunId = reader.GetGuid(1).ToString(),
                 Attempt = reader.GetInt32(2)
@@ -74,20 +81,22 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         throw new Exception("Failed to spawn task");
     }
 
-    public async Task CancelTaskAsync(DbConnection conn, string queue, string taskId, CancellationToken cancellationToken)
+    public async Task CancelTaskAsync(DbConnection conn, string tenantId, string queue, string taskId, CancellationToken cancellationToken)
     {
-        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.cancel_task(@p_queue_name, @p_task_id)");
+        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.cancel_task(@p_tenant_id, @p_queue_name, @p_task_id)");
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task EmitEventAsync(DbConnection conn, string queue, string eventName, string payloadJson, CancellationToken cancellationToken)
+    public async Task EmitEventAsync(DbConnection conn, string tenantId, string queue, string eventName, string payloadJson, CancellationToken cancellationToken)
     {
-        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.emit_event(@p_queue_name, @p_event_name, @p_payload)");
+        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.emit_event(@p_tenant_id, @p_queue_name, @p_event_name, @p_payload)");
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_event_name", NpgsqlDbType.Text, eventName);
         AddParam(cmd, "@p_payload", NpgsqlDbType.Jsonb, payloadJson);
@@ -95,15 +104,17 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<List<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken)
+
+    public async Task<List<ClaimedTask>> ClaimTasksAsync(DbConnection conn, string tenantId, string queue, string workerId, int timeout, int count, CancellationToken cancellationToken)
     {
         List<ClaimedTask> tasks = new();
 
         string sql = "SELECT run_id, task_id, attempt, task_name, params, retry_strategy, max_attempts, headers, wake_event, event_payload " +
-                     "FROM ssf.claim_task(@p_queue_name, @p_worker_id, @p_claim_timeout, @p_qty)";
+                     "FROM ssf.claim_task(@p_tenant_id, @p_queue_name, @p_worker_id, @p_claim_timeout, @p_qty)";
 
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_worker_id", NpgsqlDbType.Text, workerId);
         AddParam(cmd, "@p_claim_timeout", NpgsqlDbType.Integer, timeout);
@@ -115,6 +126,7 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         {
             tasks.Add(new ClaimedTask
             {
+                TenantId = tenantId,
                 RunId = reader.GetGuid(0).ToString(),
                 TaskId = reader.GetGuid(1).ToString(),
                 Attempt = reader.GetInt32(2),
@@ -131,10 +143,11 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         return tasks;
     }
 
-    public async Task CompleteRunAsync(DbConnection conn, string queue, string runId, string resultJson, CancellationToken cancellationToken)
+    public async Task CompleteRunAsync(DbConnection conn, string tenantId, string queue, string runId, string resultJson, CancellationToken cancellationToken)
     {
-        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.complete_run(@p_queue_name, @p_run_id, @p_state)");
+        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.complete_run(@p_tenant_id, @p_queue_name, @p_run_id, @p_state)");
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
         AddParam(cmd, "@p_state", NpgsqlDbType.Jsonb, resultJson);
@@ -142,26 +155,29 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task FailRunAsync(DbConnection conn, string queue, string runId, string errorJson, CancellationToken cancellationToken)
+    public async Task FailRunAsync(DbConnection conn, string tenantId, string queue, string runId, string errorJson, CancellationToken cancellationToken)
     {
-        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.fail_run(@p_queue_name, @p_run_id, @p_reason::jsonb, @p_retry_at)");
+        await using NpgsqlCommand cmd = CreateCommand(conn, "CALL ssf.fail_run(@p_tenant_id, @p_queue_name, @p_run_id, @p_reason::jsonb, @p_retry_at)");
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
         AddParam(cmd, "@p_reason", NpgsqlDbType.Jsonb, errorJson);
-        AddParam(cmd, "@p_retry_at", NpgsqlDbType.TimestampTz, DBNull.Value); // Kann optional als UTC DateTime übergeben werden
+        AddParam(cmd, "@p_retry_at", NpgsqlDbType.TimestampTz, DBNull.Value); // Optional
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<List<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string queue, string taskId, string runId, CancellationToken cancellationToken)
+
+    public async Task<List<CheckpointRow>> GetCheckpointStatesAsync(DbConnection conn, string tenantId, string queue, string taskId, string runId, CancellationToken cancellationToken)
     {
         List<CheckpointRow> rows = new();
 
         string sql = "SELECT checkpoint_name, state, status, owner_run_id, updated_at " +
-                     "FROM ssf.get_task_checkpoint_states(@p_queue_name, @p_task_id, @p_run_id)";
+                     "FROM ssf.get_task_checkpoint_states(@p_tenant_id, @p_queue_name, @p_task_id, @p_run_id)";
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
         AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
@@ -172,6 +188,7 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         {
             rows.Add(new CheckpointRow
             {
+                TenantId = tenantId,
                 CheckpointName = reader.GetString(0),
                 State = ParseJson(reader, 1),
                 Status = reader.GetString(2),
@@ -183,12 +200,13 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         return rows;
     }
 
-    public async Task<JsonNode?> GetSingleCheckpointAsync(DbConnection conn, string queue, string taskId, string checkpointName, CancellationToken cancellationToken)
+    public async Task<JsonNode?> GetSingleCheckpointAsync(DbConnection conn, string tenantId, string queue, string taskId, string checkpointName, CancellationToken cancellationToken)
     {
-        string sql = "SELECT checkpoint_name, state, status, owner_run_id, updated_at FROM ssf.get_task_checkpoint_state(@p_queue_name, @p_task_id, @p_step_name, @p_include_pending)";
+        string sql = "SELECT checkpoint_name, state, status, owner_run_id, updated_at FROM ssf.get_task_checkpoint_state(@p_tenant_id, @p_queue_name, @p_task_id, @p_step_name, @p_include_pending)";
 
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
         AddParam(cmd, "@p_step_name", NpgsqlDbType.Text, checkpointName);
@@ -204,12 +222,13 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         return null;
     }
 
-    public async Task PersistCheckpointAsync(DbConnection conn, string queue, string taskId, string runId, string checkpointName, string stateJson, int timeout, CancellationToken cancellationToken)
+    public async Task PersistCheckpointAsync(DbConnection conn, string tenantId, string queue, string taskId, string runId, string checkpointName, string stateJson, int timeout, CancellationToken cancellationToken)
     {
         await ExecuteWithCancelCheckAsync(async (ct) =>
         {
-            using NpgsqlCommand cmd = new("CALL ssf.set_task_checkpoint_state(@p_queue_name, @p_task_id, @p_step_name, @p_state, @p_owner_run, @p_extend_claim_by)", (NpgsqlConnection)conn);
+            using NpgsqlCommand cmd = new("CALL ssf.set_task_checkpoint_state(@p_tenant_id, @p_queue_name, @p_task_id, @p_step_name, @p_state, @p_owner_run, @p_extend_claim_by)", (NpgsqlConnection)conn);
 
+            AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
             AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
             AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
             AddParam(cmd, "@p_step_name", NpgsqlDbType.Text, checkpointName);
@@ -221,10 +240,12 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         }, cancellationToken);
     }
 
-    public async Task ScheduleRunAsync(DbConnection conn, string queue, string runId, DateTime wakeAt, CancellationToken cancellationToken)
-    {
-        using NpgsqlCommand cmd = new("CALL ssf.schedule_run(@p_queue_name, @p_run_id, @p_wake_at)", (NpgsqlConnection)conn);
 
+    public async Task ScheduleRunAsync(DbConnection conn, string tenantId, string queue, string runId, DateTime wakeAt, CancellationToken cancellationToken)
+    {
+        using NpgsqlCommand cmd = new("CALL ssf.schedule_run(@p_tenant_id, @p_queue_name, @p_run_id, @p_wake_at)", (NpgsqlConnection)conn);
+
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
         AddParam(cmd, "@p_wake_at", NpgsqlDbType.TimestampTz, wakeAt.Kind == DateTimeKind.Utc ? wakeAt : wakeAt.ToUniversalTime());
@@ -232,12 +253,13 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task HeartbeatAsync(DbConnection conn, string queue, string runId, int seconds, CancellationToken cancellationToken)
+    public async Task HeartbeatAsync(DbConnection conn, string tenantId, string queue, string runId, int seconds, CancellationToken cancellationToken)
     {
         await ExecuteWithCancelCheckAsync(async (ct) =>
         {
-            using NpgsqlCommand cmd = new("CALL ssf.extend_claim(@p_queue_name, @p_run_id, @p_extend_by)", (NpgsqlConnection)conn);
+            using NpgsqlCommand cmd = new("CALL ssf.extend_claim(@p_tenant_id, @p_queue_name, @p_run_id, @p_extend_by)", (NpgsqlConnection)conn);
 
+            AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
             AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
             AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
             AddParam(cmd, "@p_extend_by", NpgsqlDbType.Integer, seconds);
@@ -246,14 +268,15 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         }, cancellationToken);
     }
 
-    public async Task<(bool ShouldSuspend, JsonNode? Payload)> AwaitEventAsync(DbConnection conn, string queue, string taskId, string runId, string checkpointName, string eventName, int? timeout, CancellationToken cancellationToken)
+    public async Task<(bool ShouldSuspend, JsonNode? Payload)> AwaitEventAsync(DbConnection conn, string tenantId, string queue, string taskId, string runId, string checkpointName, string eventName, int? timeout, CancellationToken cancellationToken)
     {
         return await ExecuteWithCancelCheckAsync(async (ct) =>
         {
-            string sql = "SELECT should_suspend, payload FROM ssf.await_event(@p_queue_name, @p_task_id, @p_run_id, @p_step_name, @p_event_name, @p_timeout)";
+            string sql = "SELECT should_suspend, payload FROM ssf.await_event(@p_tenant_id, @p_queue_name, @p_task_id, @p_run_id, @p_step_name, @p_event_name, @p_timeout)";
 
             await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
+            AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
             AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
             AddParam(cmd, "@p_task_id", NpgsqlDbType.Uuid, Guid.Parse(taskId));
             AddParam(cmd, "@p_run_id", NpgsqlDbType.Uuid, Guid.Parse(runId));
@@ -276,14 +299,15 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     }
 
 
-    public async Task ReleaseWorkerClaimsAsync(DbConnection conn, string queue, string workerId, CancellationToken cancellationToken)
+    public async Task ReleaseWorkerClaimsAsync(DbConnection conn, string tenantId, string queue, string workerId, CancellationToken cancellationToken)
     {
-        string sql = "CALL ssf.release_worker_claims(@p_queue_name, @p_worker_id);";
+        string sql = "CALL ssf.release_worker_claims(@p_tenant_id, @p_queue_name, @p_worker_id);";
 
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
         cmd.CommandText = sql;
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_worker_id", NpgsqlDbType.Text, workerId);
 
@@ -291,14 +315,15 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
     }
 
 
-    public async Task<int> CleanupTasksAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
+    public async Task<int> CleanupTasksAsync(DbConnection conn, string tenantId, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
     {
-        string sql = "SELECT deleted_tasks FROM ssf.cleanup_tasks(@p_queue_name, @p_ttl_seconds, @p_limit);";
+        string sql = "SELECT deleted_tasks FROM ssf.cleanup_tasks(@p_tenant_id, @p_queue_name, @p_ttl_seconds, @p_limit);";
 
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
         cmd.CommandText = sql;
-        
+
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_ttl_seconds", NpgsqlDbType.Integer, ttlSeconds);
         AddParam(cmd, "@p_limit", NpgsqlDbType.Integer, limit);
@@ -308,14 +333,15 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         return result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
     }
 
-    public async Task<int> CleanupEventsAsync(DbConnection conn, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
+    public async Task<int> CleanupEventsAsync(DbConnection conn, string tenantId, string queue, int ttlSeconds, int limit, CancellationToken cancellationToken)
     {
-        string sql = "SELECT deleted_tasks FROM ssf.cleanup_tasks(@p_queue_name, @p_ttl_seconds, @p_limit);";
+        string sql = "SELECT deleted_events FROM ssf.cleanup_events(@p_tenant_id, @p_queue_name, @p_ttl_seconds, @p_limit);";
 
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
-        
+
         cmd.CommandText = sql;
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
         AddParam(cmd, "@p_ttl_seconds", NpgsqlDbType.Integer, ttlSeconds);
         AddParam(cmd, "@p_limit", NpgsqlDbType.Integer, limit);
@@ -325,14 +351,15 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
         return result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
     }
 
-    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string queue, CancellationToken cancellationToken)
+    public async Task<DateTimeOffset?> GetNextAvailableAtAsync(DbConnection conn, string tenantId, string queue, CancellationToken cancellationToken)
     {
-        string sql = "SELECT ssf.get_next_available_at(@p_queue_name)"; ;
+        string sql = "SELECT ssf.get_next_available_at(@p_tenant_id, @p_queue_name)"; ;
 
         await using NpgsqlCommand cmd = CreateCommand(conn, sql);
 
         cmd.CommandType = CommandType.Text;
 
+        AddParam(cmd, "@p_tenant_id", NpgsqlDbType.Text, tenantId);
         AddParam(cmd, "@p_queue_name", NpgsqlDbType.Text, queue);
 
         object? result = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -345,6 +372,7 @@ public class PostgresFlowDatabase : ISqlFlowDatabase
 
         return null;
     }
+
 
     private static JsonNode? ParseJson(NpgsqlDataReader reader, int ordinal)
     {
