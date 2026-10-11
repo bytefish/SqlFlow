@@ -137,13 +137,11 @@ public static class DockerContainers
     {
         string minimalScriptPath = Path.Combine(
             AppContext.BaseDirectory,
-            ".. / .. / .. / .. / sql",
-            "ssf-sqlserver-minimal.sql");
+            "../../../../../../../sql/ssf-sqlserver-minimal.sql");
 
         string extensionsScriptPath = Path.Combine(
             AppContext.BaseDirectory,
-            ".. / .. / .. / .. / sql",
-            "ssf-sqlserver-extensions.sql");
+            "../../../../../../../sql/ssf-sqlserver-signaling.sql");
 
         string minimalScriptContent =
             await File.ReadAllTextAsync(minimalScriptPath)

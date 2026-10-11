@@ -17,8 +17,8 @@ namespace SqlFlowSdk.Postgres.Tests
         public static PostgreSqlContainer PostgresContainer = new PostgreSqlBuilder("postgres:18")
             .WithName("postgres")
             .WithNetwork(ServicesNetwork)
-            .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "../../../../sql/ssf-postgres-minimal.sql"), "/docker-entrypoint-initdb.d/1-ssf-postgres-minimal.sql")
-            .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "../../../../sql/ssf-postgres-signaling.sql"), "/docker-entrypoint-initdb.d/2-ssf-postgres-signaling.sql")
+            .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "../../../../../../../sql/ssf-postgres-minimal.sql"), "/docker-entrypoint-initdb.d/1-ssf-postgres-minimal.sql")
+            .WithBindMount(Path.Combine(Directory.GetCurrentDirectory(), "../../../../../../../sql/ssf-postgres-signaling.sql"), "/docker-entrypoint-initdb.d/2-ssf-postgres-signaling.sql")
             // Set Username and Password
             .WithUsername("postgres")
             .WithPassword("password")
