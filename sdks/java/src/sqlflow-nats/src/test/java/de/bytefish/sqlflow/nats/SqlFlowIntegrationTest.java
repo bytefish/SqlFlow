@@ -23,7 +23,6 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.MountableFile;
 
 import de.bytefish.sqlflow.postgres.PostgresFlowDatabase;
 
@@ -75,6 +74,7 @@ public class SqlFlowIntegrationTest {
     private ISqlFlow sqlFlow;
     private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
+    private static final String TENANT_ID = "tenant-test";
     private static final String QUEUE = "test-queue";
     private static final String WORKER_ID = "test-worker-1";
 
@@ -96,10 +96,8 @@ public class SqlFlowIntegrationTest {
     }
 
     static void initializeDatabase() throws Exception {
-        // Wenn Maven aus dem Modul-Root (sdks/java/src/sqlflow-nats) ausführt:
         Path sqlFilePath = Paths.get("../../../../sql/ssf-postgres-minimal.sql").normalize().toAbsolutePath();
 
-        // Fallback, falls die IDE oder Maven vom Repo-Root gestartet wird:
         if (!Files.exists(sqlFilePath)) {
             sqlFilePath = Paths.get("sql/ssf-postgres-minimal.sql").normalize().toAbsolutePath();
         }
@@ -168,7 +166,7 @@ public class SqlFlowIntegrationTest {
         // 3. Inject into the SqlFlow Client
         sqlFlow = new SqlFlow(db, mapper, natsEventPublisher, natsJobPublisher);
 
-        sqlFlow.createQueue(QUEUE);
+        sqlFlow.createQueue(TENANT_ID, QUEUE);
 
         // 4. Set up the NATS Signal Listener for the Dispatcher
         signals = new NatsQueueSignalListener(natsConnection);
@@ -186,6 +184,7 @@ public class SqlFlowIntegrationTest {
     private WorkerInstance createWorker() {
         WorkerInstance worker = new WorkerInstance(
                 WorkerOptions.builder()
+                        .tenantId(TENANT_ID)
                         .workerId(WORKER_ID)
                         .queue(QUEUE)
                         .claimTimeout(120)
@@ -205,7 +204,7 @@ public class SqlFlowIntegrationTest {
         // ARRANGE
         CompletableFuture<Integer> completionSource = new CompletableFuture<>();
 
-        sqlFlow.registerTask(new TaskRegistrationOptions("add-numbers", 3), (ctx, parameters) -> {
+        sqlFlow.registerTask(new TaskRegistrationOptions(TENANT_ID, "add-numbers", 3), (ctx, parameters) -> {
             if (parameters == null || parameters.isNull()) {
                 throw new IllegalStateException("Expected JSON parameters");
             }
@@ -217,7 +216,7 @@ public class SqlFlowIntegrationTest {
         });
 
         // ACT
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
         sqlFlow.spawn(options, "add-numbers", new MathParams(10, 20));
 
         WorkerInstance worker = createWorker();
@@ -238,7 +237,7 @@ public class SqlFlowIntegrationTest {
         AtomicInteger step1Count = new AtomicInteger(0);
         AtomicBoolean shouldCrash = new AtomicBoolean(true);
 
-        sqlFlow.registerTask(new TaskRegistrationOptions("checkpoint-task", 3), (ctx, parameters) -> {
+        sqlFlow.registerTask(new TaskRegistrationOptions(TENANT_ID, "checkpoint-task", 3), (ctx, parameters) -> {
             ctx.step("charge-card", () -> {
                 step1Count.incrementAndGet();
             });
@@ -249,7 +248,7 @@ public class SqlFlowIntegrationTest {
             return "ORDER_COMPLETED";
         });
 
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
         SpawnResult spawnResult = sqlFlow.spawn(options, "checkpoint-task", new OrderParams("ORD-123"));
 
         // ACT: Run worker until it processes the task (which will crash once, then retry)
@@ -269,7 +268,6 @@ public class SqlFlowIntegrationTest {
 
         // ASSERT
         assertTrue(isCompleted, "Task should ultimately complete successfully.");
-        // The core check: Step 1 must have run exactly ONCE because of the checkpoint!
         assertEquals(1, step1Count.get(), "Step 1 should not execute again on the retry due to checkpoint.");
     }
 
@@ -279,10 +277,9 @@ public class SqlFlowIntegrationTest {
         // ARRANGE
         CompletableFuture<String> paymentRef = new CompletableFuture<>();
 
-        sqlFlow.registerTask(new TaskRegistrationOptions("event-task", 3), (ctx, parameters) -> {
+        sqlFlow.registerTask(new TaskRegistrationOptions(TENANT_ID, "event-task", 3), (ctx, parameters) -> {
             String orderId = parameters.get("orderId").asText();
 
-            // This throws SuspendTaskException internally if event is missing!
             Optional<PaymentEvent> payment = ctx.awaitEvent(
                     "payment-" + orderId, "wait-for-payment", null, PaymentEvent.class
             );
@@ -294,13 +291,13 @@ public class SqlFlowIntegrationTest {
             return "FAILED";
         });
 
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
 
         SpawnResult spawnResult = sqlFlow.spawn(options, "event-task", new OrderParams("999"));
 
         WorkerInstance worker = createWorker();
 
-        // Wait for the task to be suspended (state = 'sleeping' inside ssf.runs due to await_event logic)
+        // Wait for the task to be suspended (state = 'sleeping')
         for (int i = 0; i < 10; i++) {
             if ("sleeping".equals(getTaskState(spawnResult.taskId()))) {
                 break;
@@ -311,7 +308,7 @@ public class SqlFlowIntegrationTest {
         assertEquals("sleeping", getTaskState(spawnResult.taskId()), "Task should be sleeping waiting for event.");
 
         // ACT: Emit the event to wake it up. This routes through NatsEventPublisher.
-        sqlFlow.emitEvent(new EmitEventOptions(QUEUE), "payment-999", new PaymentEvent(true, "TX-12345"));
+        sqlFlow.emitEvent(new EmitEventOptions(TENANT_ID, QUEUE), "payment-999", new PaymentEvent(true, "TX-12345"));
 
         // Wait for completion signaled by the CompletableFuture inside the lambda
         String ref = paymentRef.get(5, TimeUnit.SECONDS);
@@ -335,11 +332,11 @@ public class SqlFlowIntegrationTest {
     @Test
     @Order(4)
     public void testCancelTask() throws Exception {
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
         SpawnResult spawnResult = sqlFlow.spawn(options, "dummy-task", new MathParams(5, 5));
 
         // ACT: Cancel task before it is picked up
-        sqlFlow.cancelTask(new CancelTaskOptions(QUEUE), spawnResult.taskId());
+        sqlFlow.cancelTask(new CancelTaskOptions(TENANT_ID, QUEUE), spawnResult.taskId());
 
         // ASSERT
         assertEquals("cancelled", getTaskState(spawnResult.taskId()));
@@ -350,10 +347,11 @@ public class SqlFlowIntegrationTest {
     private String getTaskState(String taskId) throws SQLException {
         try (java.sql.Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT state FROM ssf.tasks WHERE task_id = ?::uuid"
+                     "SELECT state FROM ssf.tasks WHERE tenant_id = ? AND task_id = ?::uuid"
              )) {
 
-            stmt.setString(1, taskId);
+            stmt.setString(1, TENANT_ID);
+            stmt.setString(2, taskId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
