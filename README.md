@@ -12,12 +12,13 @@ The SQL Scripts for creating the SqlFlow Database Schema for SQL Server:
 * [SQL Server: `sql/ssf-sqlserver-minimal.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-sqlserver-minimal.sql)
 * [SQL Server (Service Broker): `sql/ssf-sqlserver-signaling.sql`](https://github.com/bytefish/SqlFlow/blob/main/sql/ssf-sqlserver-signaling.sql)
 
-While SqlFlow took a large deal of inspiration from Absurd, it expands significantly on the core concepts to deliver a production-ready, multi-language ecosystem. It features:
+While SqlFlow took a large deal of inspiration from Absurd, it expands significantly on the core concepts to deliver a production-ready, multi-tenant, multi-language ecosystem. It features:
 
 * A much simpler database model optimized for high throughput.
 * First-class support for both **PostgreSQL** and **SQL Server**.
 * An advanced **Signaling Layer** featuring native database events and **NATS JetStream** support, eliminating polling bottlenecks and allowing horizontal scaling in distributed systems.
-* Native SDKs for **.NET, Java, Python, and Go**.
+* Native SDKs for **.NET, Java, Python, and Go**
+* Multitenancy Support as a first class citizen
 
 SqlFlow also comes with a Management API and a Control Panel to understand your system's health, monitor task processing, debug slow tasks, inspect event blockades, and search for specific executions.
 
@@ -40,13 +41,16 @@ At its core, SqlFlow solves the problem of long-running, brittle application log
 Here is how the architecture fits together from start to finish:
 
 ### 1. Spawning and Dispatching
+
 When your application triggers a new workflow (spawns a Task), two things happen instantly:
+
 1. **The DB Commit:** The task's parameters and initial state are durably written to a database table. The database is the absolute source of truth.
 2. **The Wake-Up Signal:** The publisher immediately fires a fire-and-forget `"ping"` over a signaling channel. 
 
 This guarantees that even if the signal gets lost due to network issues, the actual work is safely stored in the database.
 
 ### 2. Zero-Polling via Smart Signaling
+
 Historically, database-backed queues rely on infinite `WHILE` loops (polling) to check for new tasks, which crushes database CPU. SqlFlow avoids this entirely by suspending idle workers in memory until they receive that wake-up signal. 
 
 SqlFlow adapts this signaling layer natively to your chosen infrastructure:
@@ -55,6 +59,7 @@ SqlFlow adapts this signaling layer natively to your chosen infrastructure:
 * **NATS JetStream (Optional):** At massive distributed scale, database signaling can become a bottleneck. SqlFlow allows you to swap the Signal Listener to **NATS**. The database remains the source of truth, but the pub/sub signaling happens entirely over a high-speed broker. *(See [High-Performance Signaling with NATS](docs/nats-signaling.md))*
 
 ### 3. Concurrency and Rate Limiting
+
 Because workers are woken up by a generic ping, they don't blindly execute everything at once. When a worker thread wakes up, it executes a transaction to claim a batch of tasks from the database. 
 
 This creates a natural, highly efficient rate limit:
@@ -64,6 +69,7 @@ This creates a natural, highly efficient rate limit:
 * **No wasted DB cycles:** If the queue is empty, the worker goes back to sleep. It only queries the database when it knows work is there (via a signal) or when a fallback safety timeout expires.
 
 ### 4. Time and Scheduling
+
 SqlFlow handles time natively in the database. If you schedule a task for tomorrow, or if a task fails and enters an exponential backoff retry state, its `next_execution_time` is pushed to the future. 
 
 Workers simply ignore these rows until the time arrives. Because workers utilize a smart-polling fallback, if they are asleep, they will naturally wake up at intervals to check if any scheduled tasks have become due, ensuring reliable execution without constant database hammering.
