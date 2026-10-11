@@ -1,9 +1,10 @@
+@tenantId = tenant-alpha
 @issueId = 12345
 @delayMs = 15000
 
 ### Start the Agent Job
 # @name startAgent
-POST {{baseUrl}}/agent/start
+POST {{baseUrl}}/agent/{{tenantId}}/start
 Content-Type: application/json
 
 {
@@ -32,7 +33,7 @@ Content-Type: application/json
     // Directly use the evaluated template variable or fallback to 15000
     await sleep(parseInt("{{delayMs}}") || 15000);
 %}
-POST {{baseUrl}}/agent/review/{{issueId}}/{{taskId}}-attempt-1
+POST {{baseUrl}}/agent/{{tenantId}}/review/{{issueId}}/{{taskId}}-attempt-1
 Content-Type: application/json
 
 {
@@ -50,7 +51,7 @@ Content-Type: application/json
 < {%
     await sleep(parseInt("{{delayMs}}") || 15000);
 %}
-POST {{baseUrl}}/agent/review/{{issueId}}/{{taskId}}-attempt-2
+POST {{baseUrl}}/agent/{{tenantId}}/review/{{issueId}}/{{taskId}}-attempt-2
 Content-Type: application/json
 
 {

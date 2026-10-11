@@ -25,102 +25,51 @@ async def _init_connection(conn):
 
 class PostgresQueueSignalListener(QueueSignalListener):
     def __init__(self, connection_string: str):
-        self._connection_string = (
-            connection_string
-        )
-
+        self._connection_string = connection_string
         self._connection = None
-
         self._queues = {}
 
-    async def register_queue(
-        self,
-        queue_name: str
-    ) -> None:
-
-        if queue_name in self._queues:
+    async def register_queue(self, tenant_id: str, queue_name: str) -> None:
+        key = f"{tenant_id}:{queue_name}"
+        if key in self._queues:
             return
 
         event = asyncio.Event()
-
-        #
-        # Initial reconciliation.
-        #
         event.set()
-
-        self._queues[queue_name] = event
+        self._queues[key] = event
 
     async def start(self):
+        self._connection = await asyncpg.connect(self._connection_string)
+        await self._connection.add_listener("ssf_work_available", self._on_notification)
 
-        self._connection = (
-            await asyncpg.connect(
-                self._connection_string
-            )
-        )
-
-        await self._connection.add_listener(
-            "ssf_work_available",
-            self._on_notification
-        )
-
-    async def _on_notification(
-        self,
-        connection,
-        pid,
-        channel,
-        payload
-    ):
-
-        event = (
-            self._queues.get(payload)
-        )
-
+    async def _on_notification(self, connection, pid, channel, payload):
+        event = self._queues.get(payload)
         if event:
             event.set()
 
-    async def wait_for_signal(
-        self,
-        queue_name: str,
-        timeout_seconds: float
-    ) -> bool:
-        event = self._queues[queue_name]
+    async def wait_for_signal(self, tenant_id: str, queue_name: str, timeout_seconds: float) -> bool:
+        key = f"{tenant_id}:{queue_name}"
+        event = self._queues[key]
 
         try:
-            await asyncio.wait_for(
-                event.wait(),
-                timeout_seconds
-            )
-
+            await asyncio.wait_for(event.wait(), timeout_seconds)
             event.clear()
-
             return True
-
         except asyncio.TimeoutError:
             return False
 
 class PostgresDriver(DatabaseDriver):
-    """
-    PostgreSQL implementation of the SqlFlow DatabaseDriver using asyncpg.
-    Maps exactly to the 'ssf' schema stored procedures and functions.
-    """
-    
     def __init__(self, dsn: str):
-        """
-        Initializes the Postgres driver.
-        :param dsn: The connection string (e.g., postgresql://user:pass@localhost:5432/mydb)
-        """
         self.dsn = dsn
         self._listener = None
         self._pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
-        """Initializes the async connection pool."""
         if not self._pool:
             self._pool = await asyncpg.create_pool(self.dsn, init=_init_connection)
             logger.info("PostgreSQL connection pool created.")
 
     async def disconnect(self) -> None:
-        """Closes the connection pool."""
         if self._pool:
             await self._pool.close()
             self._pool = None
@@ -131,22 +80,22 @@ class PostgresDriver(DatabaseDriver):
             raise RuntimeError("Database connection pool is not initialized. Call connect() first.")
         return self._pool
 
-    async def create_queue(self, p_queue_name: str, p_storage_mode: str) -> None:
+    async def create_queue(self, p_tenant_id: str, p_queue_name: str, p_storage_mode: str) -> None:
         pool = self._ensure_pool()
         await pool.execute(
-            "CALL ssf.create_queue($1, $2)", 
-            p_queue_name, p_storage_mode
+            "CALL ssf.create_queue($1, $2, $3)", 
+            p_tenant_id, p_queue_name, p_storage_mode
         )
 
-    async def spawn_task(self, p_queue_name: str, p_task_name: str, p_params: Any, p_options: Any) -> SpawnResult:
+    async def spawn_task(self, p_tenant_id: str, p_queue_name: str, p_task_name: str, p_params: Any, p_options: Any) -> SpawnResult:
         pool = self._ensure_pool()
 
         row = await pool.fetchrow(
             """
             SELECT task_id, run_id, attempt, created 
-            FROM ssf.spawn_task($1, $2, $3::jsonb, $4::jsonb)
+            FROM ssf.spawn_task($1, $2, $3, $4::jsonb, $5::jsonb)
             """,
-            p_queue_name, p_task_name, p_params, p_options
+            p_tenant_id, p_queue_name, p_task_name, p_params, p_options
         )
         
         if not row:
@@ -159,93 +108,88 @@ class PostgresDriver(DatabaseDriver):
             created=row['created']
         )
 
-    async def claim_task(self, p_queue_name: str, p_worker_id: str, p_claim_timeout: int, p_qty: int) -> List[Dict[str, Any]]:
+    async def claim_task(self, p_tenant_id: str, p_queue_name: str, p_worker_id: str, p_claim_timeout: int, p_qty: int) -> List[Dict[str, Any]]:
         pool = self._ensure_pool()
         rows = await pool.fetch(
-            "SELECT * FROM ssf.claim_task($1, $2, $3, $4)",
-            p_queue_name, p_worker_id, p_claim_timeout, p_qty
+            "SELECT * FROM ssf.claim_task($1, $2, $3, $4, $5)",
+            p_tenant_id, p_queue_name, p_worker_id, p_claim_timeout, p_qty
         )
         return [dict(row) for row in rows]
 
-    async def complete_run(self, p_queue_name: str, p_run_id: UUID, p_state: Any) -> None:
+    async def complete_run(self, p_tenant_id: str, p_queue_name: str, p_run_id: UUID, p_state: Any) -> None:
         pool = self._ensure_pool()
         await pool.execute(
-            "CALL ssf.complete_run($1, $2, $3::jsonb)",
-            p_queue_name, p_run_id, p_state
+            "CALL ssf.complete_run($1, $2, $3, $4::jsonb)",
+            p_tenant_id, p_queue_name, p_run_id, p_state
         )
 
-    async def schedule_run(self, p_queue_name: str, p_run_id: UUID, p_wake_at: datetime) -> None:
+    async def schedule_run(self, p_tenant_id: str, p_queue_name: str, p_run_id: UUID, p_wake_at: datetime) -> None:
         pool = self._ensure_pool()
         await pool.execute(
-            "CALL ssf.schedule_run($1, $2, $3)",
-            p_queue_name, p_run_id, p_wake_at
+            "CALL ssf.schedule_run($1, $2, $3, $4)",
+            p_tenant_id, p_queue_name, p_run_id, p_wake_at
         )
 
-    async def fail_run(self, p_queue_name: str, p_run_id: UUID, p_reason: Any, p_retry_at: datetime) -> None:
+    async def fail_run(self, p_tenant_id: str, p_queue_name: str, p_run_id: UUID, p_reason: Any, p_retry_at: datetime) -> None:
         pool = self._ensure_pool()
         await pool.execute(
-            "CALL ssf.fail_run($1, $2, $3::jsonb, $4)",
-            p_queue_name, p_run_id, p_reason, p_retry_at
+            "CALL ssf.fail_run($1, $2, $3, $4::jsonb, $5)",
+            p_tenant_id, p_queue_name, p_run_id, p_reason, p_retry_at
         )
 
-    async def set_task_checkpoint_state(self, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_state: Any, p_owner_run: UUID, p_extend_claim_by: int) -> None:
+    async def set_task_checkpoint_state(self, p_tenant_id: str, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_state: Any, p_owner_run: UUID, p_extend_claim_by: int) -> None:
         pool = self._ensure_pool()
         await pool.execute(
-            "CALL ssf.set_task_checkpoint_state($1, $2, $3, $4, $5, $6)",
-            p_queue_name, p_task_id, p_step_name, p_state, p_owner_run, p_extend_claim_by
+            "CALL ssf.set_task_checkpoint_state($1, $2, $3, $4, $5, $6, $7)",
+            p_tenant_id, p_queue_name, p_task_id, p_step_name, p_state, p_owner_run, p_extend_claim_by
         )
 
-    async def get_task_checkpoint_state(self, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_include_pending: int) -> Optional[Dict[str, Any]]:
+    async def get_task_checkpoint_state(self, p_tenant_id: str, p_queue_name: str, p_task_id: UUID, p_step_name: str, p_include_pending: int) -> Optional[Dict[str, Any]]:
         pool = self._ensure_pool()
         row = await pool.fetchrow(
-            "SELECT * FROM ssf.get_task_checkpoint_state($1, $2, $3, $4)",
-            p_queue_name, p_task_id, p_step_name, p_include_pending
+            "SELECT * FROM ssf.get_task_checkpoint_state($1, $2, $3, $4, $5)",
+            p_tenant_id, p_queue_name, p_task_id, p_step_name, p_include_pending
         )
         return dict(row) if row else None
 
-    async def await_event(self, p_queue_name: str, p_task_id: UUID, p_run_id: UUID, p_step_name: str, p_event_name: str, p_timeout: Optional[int]) -> Dict[str, Any]:
+    async def await_event(self, p_tenant_id: str, p_queue_name: str, p_task_id: UUID, p_run_id: UUID, p_step_name: str, p_event_name: str, p_timeout: Optional[int]) -> Dict[str, Any]:
         pool = self._ensure_pool()
         row = await pool.fetchrow(
-            "SELECT * FROM ssf.await_event($1, $2, $3, $4, $5, $6)",
-            p_queue_name, p_task_id, p_run_id, p_step_name, p_event_name, p_timeout
+            "SELECT * FROM ssf.await_event($1, $2, $3, $4, $5, $6, $7)",
+            p_tenant_id, p_queue_name, p_task_id, p_run_id, p_step_name, p_event_name, p_timeout
         )
         if not row:
             raise RuntimeError("Database error: await_event returned no state.")
         return dict(row)
 
-    async def emit_event(self, p_queue_name: str, p_event_name: str, p_payload: Any) -> None:
+    async def emit_event(self, p_tenant_id: str, p_queue_name: str, p_event_name: str, p_payload: Any) -> None:
         pool = self._ensure_pool()            
         await pool.execute(
-            "CALL ssf.emit_event($1, $2, $3::jsonb)",
-            p_queue_name, p_event_name, p_payload
+            "CALL ssf.emit_event($1, $2, $3, $4::jsonb)",
+            p_tenant_id, p_queue_name, p_event_name, p_payload
         )
 
-    async def cancel_task(self, p_queue_name: str, p_task_id: UUID) -> None:
+    async def cancel_task(self, p_tenant_id: str, p_queue_name: str, p_task_id: UUID) -> None:
         pool = self._ensure_pool()
         await pool.execute(
-            "CALL ssf.cancel_task($1, $2)",
-            p_queue_name, p_task_id
+            "CALL ssf.cancel_task($1, $2, $3)",
+            p_tenant_id, p_queue_name, p_task_id
         )
             
-    async def get_next_available_at(self, p_queue_name: str) -> Optional[datetime]:
+    async def get_next_available_at(self, p_tenant_id: str, p_queue_name: str) -> Optional[datetime]:
         pool = self._ensure_pool()
         row = await pool.fetchrow(
-            "SELECT ssf.get_next_available_at($1)",
-            p_queue_name
+            "SELECT ssf.get_next_available_at($1, $2)",
+            p_tenant_id, p_queue_name
         )
         return row[0] if row else None
 
     async def create_queue_signal_listener(self) -> QueueSignalListener:
-
         if self._listener is not None:
             return self._listener
 
-        listener = PostgresQueueSignalListener(
-            self.dsn
-        )
-
+        listener = PostgresQueueSignalListener(self.dsn)
         await listener.start()
-
         self._listener = listener
 
         return listener
