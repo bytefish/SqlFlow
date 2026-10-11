@@ -34,9 +34,13 @@ Traditional approaches require you to build complex state machines, database pol
 Let's define the data models representing our inputs, states, and final output for an AI Agent that fixes GitHub bugs.
 
 ```csharp
-public class AgentTask {
+public class AgentTask
+{
+    [JsonPropertyName("tenant_id")]
+    public string TenantId { get; set; } = "";
+
     [JsonPropertyName("issue_id")]
-    public string IssueId { get; set; } = ""; 
+    public string IssueId { get; set; } = "";
 }
 
 public class Solution {
@@ -44,18 +48,25 @@ public class Solution {
     public string PatchedCode { get; set; } = ""; 
 }
 
-public class HumanApproval {
+public class HumanApproval 
+{
     [JsonPropertyName("approved")]
     public bool Approved { get; set; }
+
     [JsonPropertyName("reason")]
     public string? Reason { get; set; } 
 }
 
-public class AgentResult {
+public class AgentResult
+{
     [JsonPropertyName("success")]
     public bool Success { get; set; }
+
     [JsonPropertyName("pull_request_url")]
     public string? PullRequestUrl { get; set; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; set; }
 }
 ```
 
@@ -64,26 +75,44 @@ public class AgentResult {
 The agent interacts with the outside world. We simulate a slow LLM and a GitHub service. Because these calls are wrapped by SqlFlow later, we won't lose our place if the app recycles during the `Task.Delay`.
 
 ```csharp
-public interface ILlmService {
-    Task<Solution> GenerateFixAsync(string log, string lastFeedback, CancellationToken ct);
+public interface ILlmService
+{
+    Task<Solution> GenerateFixAsync(string tenantId, string log, string lastFeedback, CancellationToken ct);
 }
 
-public class LlmService : ILlmService {
-    public async Task<Solution> GenerateFixAsync(string log, string lastFeedback, CancellationToken ct) {
-        // Simulate a very expensive LLM call
+public class LlmService : ILlmService
+{
+    private readonly ILogger<LlmService> _logger;
+    public LlmService(ILogger<LlmService> logger) => _logger = logger;
+
+    public async Task<Solution> GenerateFixAsync(string tenantId, string log, string lastFeedback, CancellationToken ct)
+    {
+        _logger.LogInformation("Agent [Tenant: {TenantId}] is thinking: 'Learned from feedback: {feedback}'", tenantId, lastFeedback);
+
         await Task.Delay(2500, ct);
 
         string code = lastFeedback.Contains("error handling")
-            ? "// AI: Improved Logging & Error-Handling added\nif(data == null) throw new ArgumentNullException();" 
+            ? "// AI: Improved Logging & Error-Handling added\nif(data == null) throw new ArgumentNullException();"
             : "// AI: Simple Fix for the NullReferenceException\nif(data == null) return;";
+
+        _logger.LogInformation("LLM generated fix for [Tenant: {TenantId}]: {PatchedCode}", tenantId, code);
+
         return new Solution { PatchedCode = code };
     }
 }
 
-// Imagine IGitHubService exists with methods:
-// - Task<Issue> GetIssueDetailsAsync(string issueId, CancellationToken ct)
-// - Task RequestHumanReviewAsync(string issueId, Solution fix, string correlationId, CancellationToken ct)
-// - Task<string> CreatePullRequestAsync(string issueId, string code, CancellationToken ct)
+// Imagine IGitHubService exists with this interface ...
+//
+public interface IGitHubService
+{
+    Task<Issue> GetIssueDetailsAsync(string tenantId, string id, CancellationToken ct);
+
+    Task<string> CreatePullRequestAsync(string tenantId, string id, string code, CancellationToken ct);
+
+    Task RequestHumanReviewAsync(string tenantId, string issueId, Solution proposedFix, string correlationId, CancellationToken ct);
+
+    Task EscalateToSeniorAsync(string tenantId, string id, string reason, CancellationToken ct);
+}
 ```
 
 ### 3. The Autonomous Agent Job (The Core Concept)
@@ -154,38 +183,67 @@ We configure a background worker to process the tasks, and expose HTTP endpoints
 
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
+
 string connectionString = "Host=127.0.0.1;Port=5432;Database=sqlflow;Username=postgres;Password=password;";
 
 builder.Services.AddSingleton<ILlmService, LlmService>();
 builder.Services.AddSingleton<IGitHubService, GitHubService>();
 
-// Register the SqlFlow SDK and setup the worker
+// Configure Workers and Jobs with Multi-Tenancy (Example Tenant: "tenant-alpha")
+const string tenantId = "tenant-alpha";
+const string queueName = "ai-agent-queue";
+
 builder.Services
     .AddSqlFlowPostgres(connectionString)
-    // .AddNatsSignaling("nats://localhost:4222") // Uncomment to instantly scale to NATS JetStream
-    .AddWorker("ai-agent-queue", worker =>
+    .AddWorker(tenantId, queueName, worker =>
     {
-        worker.SetConcurrency(5).SetPollInterval(1);
-        worker.AddJob<AutonomousAgentJob, AgentTask, AgentResult>("solve-bug");
+        worker
+            .SetConcurrency(1)
+            .SetPollInterval(1);
+
+        worker.AddJob<AutonomousAgentJob, AgentTask, AgentResult>("solve-bug", options =>
+        {
+            options.WithMaxAttempts(3);
+        });
     });
 
 var app = builder.Build();
 
-// Endpoint to spawn the durable task
-app.MapPost("/agent/start", async (ISqlFlow client, [FromBody] AgentTask task, CancellationToken ct) =>
+// A Webhook triggers the Agent for a specific tenant
+app.MapPost("/agent/start/{tenantId}", async (
+    [FromServices] ISqlFlow client,
+    [FromRoute] string tenantId,
+    [FromBody] AgentTask task,
+    CancellationToken ct) =>
 {
-    var result = await client.SpawnAsync(new SpawnOptions { Queue = "ai-agent-queue" }, "solve-bug", task, ct);
-    return Results.Ok(new { RunId = result.RunId, TaskId = result.TaskId });
+    task.TenantId = tenantId;
+
+    var result = await client.SpawnAsync(new SpawnOptions
+    {
+        TenantId = tenantId,
+        Queue = queueName
+    }, "solve-bug", task, ct);
+
+    return Results.Ok(new { TenantId = tenantId, RunId = result.RunId, TaskId = result.TaskId, Status = $"Agent dispatched for tenant {tenantId} to fix Issue #{task.IssueId}" });
 });
 
-// Webhook for the Human Reviewer to resume the suspended task
-app.MapPost("/agent/review/{issueId}/{correlationId}", async (IEventPublisher publisher, string issueId, string correlationId, [FromBody] HumanApproval approval, CancellationToken ct) =>
+// A Lead-Developer clicks on "Approve" or "Reject" for a specific tenant
+app.MapPost("/agent/review/{tenantId}/{issueId}/{correlationId}", async (
+    [FromServices] IEventPublisher publisher,
+    [FromRoute] string tenantId,
+    [FromRoute] string issueId,
+    [FromRoute] string correlationId,
+    [FromBody] HumanApproval approval,
+    CancellationToken ct) =>
 {
-    await publisher.EmitEventAsync(
-        queue: "ai-agent-queue", 
-        eventName: $"agent-approval:{issueId}:{correlationId}", 
-        payload: approval, ct);
-    return Results.Ok();
+    // Wake up the agent working on this specific tenant's issue
+    await publisher.EmitEventAsync(tenantId, queueName, eventName: $"agent-approval:{tenantId}:{issueId}:{correlationId}", payload: approval, ct);
+
+    string message = approval.Approved
+        ? $"Fix for tenant {tenantId}, correlation {correlationId} approved. Agent is completing its work."
+        : $"Fix for tenant {tenantId}, correlation {correlationId} rejected. Agent retries with feedback: '{approval.Reason}'";
+
+    return Results.Ok(new { Message = message });
 });
 
 app.Run();

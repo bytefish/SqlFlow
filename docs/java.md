@@ -36,16 +36,26 @@ Traditional approaches require you to build complex state machines, database pol
 Let's define the data models representing our inputs, states, and final output using standard Java Records.
 
 ```java
-public record AgentTask(@JsonProperty("issue_id") String issueId) {}
-public record Issue(@JsonProperty("stack_trace") String stackTrace) {}
-public record Solution(@JsonProperty("patched_code") String patchedCode) {}
-public record HumanApproval(
-        @JsonProperty("approved") boolean approved,
-        @JsonProperty("reason") String reason
+public record AgentTask(
+    @JsonProperty("issue_id") String issueId
 ) {}
+
+public record Issue(
+    @JsonProperty("stack_trace") String stackTrace
+) {}
+
+public record Solution(
+    @JsonProperty("patched_code") String patchedCode
+) {}
+
+public record HumanApproval(
+    @JsonProperty("approved") boolean approved,
+    @JsonProperty("reason") String reason
+) {}
+
 public record AgentResult(
-        @JsonProperty("success") boolean success,
-        @JsonProperty("pull_request_url") String pullRequestUrl
+    @JsonProperty("success") boolean success,
+    @JsonProperty("pull_request_url") String pullRequestUrl
 ) {}
 ```
 
@@ -59,16 +69,22 @@ Furthermore, we use **`ctx.awaitEvent`** to wait for human interaction. This ins
 @Component
 public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
 
-    private final LlmService llmService; // Simulated HTTP service
-    private final GitHubService gitHubService; // Simulated HTTP service
+    private static final Logger logger = LoggerFactory.getLogger(AutonomousAgentJob.class);
 
-    public AutonomousAgentJob(LlmService llmService, GitHubService gitHubService) {
+    private final LlmService llmService;
+    private final GitHubService gitHubService;
+    private final LocalNotificationService localNotificationService;
+
+    public AutonomousAgentJob(LlmService llmService, GitHubService gitHubService, LocalNotificationService localNotificationService) {
         this.llmService = llmService;
         this.gitHubService = gitHubService;
+        this.localNotificationService = localNotificationService;
     }
 
     @Override
     public AgentResult execute(TaskContext ctx, AgentTask task) throws Exception {
+        logger.info("Agent starts researching ticket {} for tenant {}", task.issueId(), ctx.getTenantId());
+
         Issue bugReport = ctx.step("fetch-issue-context", Issue.class, () ->
                 gitHubService.getIssueDetails(task.issueId())
         );
@@ -80,7 +96,10 @@ public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
         while (!isApproved && attempt < 3) {
             attempt++;
             String correlationId = ctx.getTaskId() + "-attempt-" + attempt;
-            final String currentFeedback = lastFeedback; 
+
+            logger.info("Attempt {}/3: Generating a fix based on: {}", attempt, lastFeedback);
+
+            final String currentFeedback = lastFeedback;
 
             Solution proposedFix = ctx.step("generate-code-fix-" + attempt, Solution.class, () ->
                     llmService.generateFix(bugReport.stackTrace(), currentFeedback)
@@ -88,11 +107,14 @@ public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
 
             ctx.step("notify-reviewer-" + attempt, () -> {
                 gitHubService.requestHumanReview(task.issueId(), proposedFix, correlationId);
+
+                localNotificationService.notifyReviewer(task.issueId(), correlationId);
             });
 
-            // Wait for a human decision without blocking a thread! State is saved to DB here.
+            logger.info("Review for {} has been requested. Agent goes idle and waits for the code review...", correlationId);
+
             Optional<JsonNode> reviewOpt = ctx.awaitEvent(
-                    "agent-approval:" + task.issueId() + ":" + correlationId,
+                    "agent-approval:" + ctx.getTenantId() + ":" + task.issueId() + ":" + correlationId,
                     "wait-for-human-review-" + attempt,
                     null,
                     JsonNode.class
@@ -101,17 +123,33 @@ public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
             if (reviewOpt.isPresent()) {
                 JsonNode review = reviewOpt.get();
                 isApproved = review.has("approved") && review.get("approved").asBoolean();
-                lastFeedback = review.has("reason") ? review.get("reason").asText() : "No feedback";
+                lastFeedback = review.has("reason") ? review.get("reason").asText() : "No feedback has been given";
+
+                if (!isApproved) {
+                    logger.warn("Attempt {} has been rejected: {}", attempt, lastFeedback);
+                }
             }
         }
 
         if (isApproved) {
+            logger.info("Fix approved. Creating Pull Request...");
+
             String prUrl = ctx.step("create-pull-request", String.class, () ->
                     gitHubService.createPullRequest(task.issueId(), "apply-fix")
             );
-            return new AgentResult(true, prUrl);
-        } 
-        return new AgentResult(false, null);
+
+            logger.info("Mission accomplished, the PR has been created: {}", prUrl);
+            return new AgentResult(true, prUrl, null);
+
+        } else {
+            logger.error("Maximum number of attempts reached. Escalates ticket {} to a human.", task.issueId());
+
+            ctx.step("notify-senior-developer", () -> {
+                gitHubService.escalateToSenior(task.issueId(), "Agent didn't find a solution after 3 attempts.");
+            });
+
+            return new AgentResult(false, null, "Escalated to human supervisor after 3 failures.");
+        }
     }
 }
 ```
@@ -121,34 +159,146 @@ public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
 We use a Spring Boot `@Configuration` class to wire up our data source, the SqlFlow client, and map our Job to a background worker thread.
 
 ```java
+
 @Configuration
 public class SqlFlowConfiguration {
 
+    @Bean(destroyMethod = "stop")
+    public PostgreSQLContainer<?> postgresContainer() throws Exception {
+        PostgreSQLContainer<?> postgres =
+                new PostgreSQLContainer<>("postgres:18");
+
+        postgres.start();
+
+        initializeDatabase(postgres, "../../sql/ssf-postgres-minimal.sql");
+        initializeDatabase(postgres, "../../sql/ssf-postgres-signaling.sql");
+
+        return postgres;
+    }
+
+    private static void initializeDatabase(PostgreSQLContainer<?> postgres, String scriptPath) throws Exception {
+        Path sqlFilePath = Paths.get(scriptPath).normalize().toAbsolutePath();
+
+        if (!Files.exists(sqlFilePath)) {
+            throw new IllegalStateException("SQL script not found at: " + sqlFilePath);
+        }
+
+        postgres.copyFileToContainer(
+                org.testcontainers.utility.MountableFile.forHostPath(sqlFilePath),
+                "/tmp/" + scriptPath
+        );
+
+        org.testcontainers.containers.Container.ExecResult result = postgres.execInContainer(
+                "psql",
+                "-U", postgres.getUsername(),
+                "-d", postgres.getDatabaseName(),
+                "-f", "/tmp/" + scriptPath
+        );
+
+        if (result.getExitCode() != 0) {
+            throw new IllegalStateException(
+                    "SQL initialization failed:\n"
+                            + result.getStdout()
+                            + "\n"
+                            + result.getStderr()
+            );
+        }
+    }
+
     @Bean
-    public ISqlFlow sqlFlow(DataSource dataSource, ObjectMapper mapper, JobFactory jobFactory) {
+    public DataSource dataSource(
+            PostgreSQLContainer<?> postgresContainer) {
+
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(postgresContainer.getJdbcUrl());
+        config.setUsername(postgresContainer.getUsername());
+        config.setPassword(postgresContainer.getPassword());
+        config.setMaximumPoolSize(10);
+
+        return new HikariDataSource(config);
+    }
+
+    @Bean
+    public ObjectMapper objectMapper() {
+        return new ObjectMapper()
+                .registerModule(new JavaTimeModule());
+    }
+
+    @Bean
+    public JobFactory springJobFactory(ApplicationContext context) {
+        return new JobFactory() {
+            @Override
+            public <T> T getJob(String tenantId, Class<T> jobType) {
+                return context.getBean(jobType);
+            }
+        };
+    }
+
+    @Bean
+    public ISqlFlow sqlFlow(
+            DataSource dataSource,
+            ObjectMapper mapper,
+            JobFactory jobFactory) {
+
         PostgresFlowDatabase db = new PostgresFlowDatabase(dataSource, mapper);
+
         ISqlFlow client = new SqlFlow(db, mapper);
 
-        client.createQueue("ai-agent-queue");
-        client.useJob(jobFactory, mapper, "solve-bug", 3, AutonomousAgentJob.class, AgentTask.class);
+        String tenantId = "tenant-alpha";
+
+        client.createQueue(tenantId, "ai-agent-queue");
+        client.useJob(
+                jobFactory,
+                mapper,
+                tenantId,
+                "solve-bug",
+                3,
+                AutonomousAgentJob.class,
+                AgentTask.class);
 
         return client;
     }
 
     @Bean
-    public SqlFlowWorker sqlFlowWorker(ISqlFlow client) {
-        SqlFlowWorker worker = new SqlFlowWorker(
+    public QueueSignalOptions queueSignalOptions() {
+        return new QueueSignalOptions(Duration.ofSeconds(60));
+    }
+
+    @Bean
+    public SqlFlowDispatcher sqlFlowDispatcher(
+            ISqlFlow client,
+            QueueSignalListener listener,
+            QueueSignalOptions options) {
+        return new DefaultSqlFlowDispatcher(client, listener, options);
+    }
+
+    @Bean
+    public QueueSignalListener queueSignalListener(DataSource dataSource) {
+        return new PostgresQueueSignalListener(dataSource);
+    }
+
+    @Bean
+    public WorkerInstance aiWorkflow(SqlFlowDispatcher dispatcher) {
+        WorkerOptions options =
                 WorkerOptions.builder()
+                        .tenantId("tenant-alpha")
                         .workerId("spring-worker-1")
                         .queue("ai-agent-queue")
-                        .pollInterval(1.0)
-                        .concurrency(5)
-                        .build(),
-                client);
+                        .concurrency(10)
+                        .claimTimeout(120)
+                        .batchSize(10)
+                        .maxTasksPerSecond(50)
+                        .rateLimitBurstSize(100)
+                        .build();
 
-        // Run the worker loop in the background using Java 21 Virtual Threads
-        Thread.ofVirtual().start(worker);
-        return worker;
+        return new WorkerInstance(
+                options,
+                dispatcher);
+    }
+
+    @Bean
+    public SqlFlowWorkerLifecycle sqlFlowWorkerLifecycle(@Qualifier("aiWorkflow") WorkerInstance worker) {
+        return new SqlFlowWorkerLifecycle(worker);
     }
 }
 ```
@@ -168,20 +318,39 @@ public class AgentController {
         this.sqlFlow = sqlFlow;
     }
 
-    // 1. Kick off the agent asynchronously
-    @PostMapping("/start")
-    public Map<String, String> startAgent(@RequestBody AgentTask task) {
-        SpawnResult result = sqlFlow.spawn(new SpawnOptions("ai-agent-queue", null, null, null), "solve-bug", task);
-        return Map.of("runId", result.runId(), "taskId", result.taskId());
+    @PostMapping("/{tenantId}/start")
+    public Map<String, String> startAgent(
+            @PathVariable("tenantId") String tenantId,
+            @RequestBody AgentTask task) {
+
+        SpawnResult result = sqlFlow.spawn(new SpawnOptions(tenantId, "ai-agent-queue", null, null, null), "solve-bug", task);
+
+        return Map.of(
+                "tenantId", tenantId,
+                "runId", result.runId(),
+                "taskId", result.taskId(),
+                "status", "Agent dispatched to fix Issue #" + task.issueId() + " for tenant " + tenantId);
     }
 
-    // 2. Webhook for a human to approve/reject the agent's code
-    @PostMapping("/review/{issueId}/{correlationId}")
-    public void review(@PathVariable String issueId, @PathVariable String correlationId, @RequestBody HumanApproval approval) {
-        String eventName = "agent-approval:" + issueId + ":" + correlationId;
-        
-        // This wakes the sleeping AutonomousAgentJob right where it left off
-        sqlFlow.emitEvent(new EmitEventOptions("ai-agent-queue"), eventName, approval);
+    @PostMapping("/{tenantId}/review/{issueId}/{correlationId}")
+    public Map<String, String> review(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("issueId") String issueId,
+            @PathVariable("correlationId") String correlationId,
+            @RequestBody HumanApproval approval) {
+
+        String eventName = "agent-approval:" + tenantId + ":" + issueId + ":" + correlationId;
+
+        sqlFlow.emitEvent(
+                new EmitEventOptions(tenantId, "ai-agent-queue"),
+                eventName,
+                approval);
+
+        String message = approval.approved()
+                ? "Fix for " + correlationId + " approved. Agent is now completing its work."
+                : "Fix for " + correlationId + " rejected. Agent tries again with feedback: '" + approval.reason() + "'";
+
+        return Map.of("message", message);
     }
 }
 ```

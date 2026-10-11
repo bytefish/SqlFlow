@@ -65,11 +65,14 @@ var llmService = &LlmService{}       // Simulated external service
 var gitHubService = &GitHubService{} // Simulated external service
 
 func autonomousAgentWorkflow(ctx *sqlflow.TaskContext, task AgentTask) error {
-	// 1. Fetch data safely (results are checkpointed)
+	log.Printf("[Workflow] Agent starts investigation for ticket %s (Tenant: %s)", task.IssueID, ctx.TenantID)
+
 	bugReport, err := sqlflow.Step(ctx, "fetch-issue-context", func() (Issue, error) {
 		return gitHubService.GetIssueDetails(task.IssueID), nil
 	})
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	isApproved := false
 	attempt := 0
@@ -78,44 +81,70 @@ func autonomousAgentWorkflow(ctx *sqlflow.TaskContext, task AgentTask) error {
 	for !isApproved && attempt < 3 {
 		attempt++
 		correlationID := fmt.Sprintf("%s-attempt-%d", ctx.TaskID, attempt)
+		log.Printf("[Workflow] Attempt %d/3: Generating fix based on: '%s'", attempt, lastFeedback)
 
-		// 2. Call the slow, expensive LLM safely
 		proposedFix, err := sqlflow.Step(ctx, fmt.Sprintf("generate-code-fix-%d", attempt), func() (Solution, error) {
 			return llmService.GenerateFix(bugReport.StackTrace, lastFeedback), nil
 		})
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		_, err = sqlflow.Step(ctx, fmt.Sprintf("notify-reviewer-%d", attempt), func() (bool, error) {
 			gitHubService.RequestHumanReview(task.IssueID, proposedFix, correlationID)
+			notificationService.NotifyReviewer(task.IssueID, correlationID)
 			return true, nil
 		})
-		if err != nil { return err }
 
-		// 3. Wait for a human decision without blocking a thread! State is saved to DB here.
+		if err != nil {
+			return err
+		}
+
+		log.Printf("[Workflow] Review requested for %s. Agent goes to sleep and waits...", correlationID)
+
 		approval, err := sqlflow.AwaitEvent[HumanApproval](
 			ctx,
-			fmt.Sprintf("agent-approval:%s:%s", task.IssueID, correlationID),
+			fmt.Sprintf("agent-approval:%s:%s:%s", ctx.TenantID, task.IssueID, correlationID),
 			fmt.Sprintf("wait-for-human-review-%d", attempt),
 			nil,
 		)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		isApproved = approval.Approved
 		if approval.Reason != "" {
 			lastFeedback = approval.Reason
+		} else {
+			lastFeedback = "No feedback has been given"
+		}
+
+		if !isApproved {
+			log.Printf("[Workflow] ❌ Attempt %d was rejected: %s", attempt, lastFeedback)
 		}
 	}
 
 	if isApproved {
+		log.Println("[Workflow] ✅ Fix approved! Creating pull request...")
+
 		prURL, err := sqlflow.Step(ctx, "create-pull-request", func() (string, error) {
 			return gitHubService.CreatePullRequest(task.IssueID, "apply-fix"), nil
 		})
-		if err != nil { return err }
-		
-		return nil // Success
+		if err != nil {
+			return err
+		}
+
+		log.Printf("[Workflow] Mission accomplished! PR created: %s", prURL)
+		return nil
 	}
 
-	return fmt.Errorf("agent failed to find a solution after 3 attempts")
+	log.Printf("[Workflow] 🚨 Maximum attempts reached. Escalating ticket %s to a human.", task.IssueID)
+	_, err = sqlflow.Step(ctx, "notify-senior-developer", func() (bool, error) {
+		gitHubService.EscalateToSenior(task.IssueID, "Agent could not find a solution after 3 attempts.")
+		return true, nil
+	})
+
+	return err
 }
 ```
 
@@ -124,59 +153,126 @@ func autonomousAgentWorkflow(ctx *sqlflow.TaskContext, task AgentTask) error {
 We wire up the standard Go `net/http` router, connect the PostgreSQL driver, register the workflow, and start the background worker pool.
 
 ```go
+var sqlflowClient *sqlflow.Client
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	connString := "postgres://postgres:password@localhost:5432/sqlflow_db"
-	dbDriver, _ := postgres.NewPostgresDriver(ctx, connString)
+	dbDriver, err := postgres.NewPostgresDriver(ctx, connString)
+	if err != nil {
+		log.Fatalf("Error connecting to the database: %v", err)
+	}
 	defer dbDriver.Close()
 
-	sqlflowClient := sqlflow.NewClient(dbDriver)
-	_ = sqlflowClient.CreateQueue(ctx, "ai-agent-queue", "unpartitioned")
+	sqlflowClient = sqlflow.NewClient(dbDriver)
+	_ = sqlflowClient.CreateQueue(ctx, "tenant-alpha", "ai-agent-queue", "unpartitioned")
 
-	// Map the workflow function to the string identifier
 	sqlflow.RegisterWorkflow(sqlflowClient, "solve-bug", autonomousAgentWorkflow)
 
-	// Start the background worker
-	worker := sqlflowClient.CreateWorker(sqlflow.WorkerOptions{
-		WorkerID:     "agent-worker-1",
-		QueueName:    "ai-agent-queue",
-		Concurrency:  5,
-	})
+	worker, err := sqlflowClient.CreateWorker(
+		ctx,
+		sqlflow.WorkerOptions{
+			TenantID:    "tenant-alpha",
+			QueueName:   "ai-agent-queue",
+			WorkerID:    "worker-1",
+			Concurrency: 5,
+			BatchSize:   5,
+		},
+	)
+
+	if err != nil {
+		panic(err)
+	}
+
 	worker.Start(ctx)
+
+	log.Println("Background worker started.")
 
 	mux := http.NewServeMux()
 
-	// Endpoint 1: Spawn the Agent Task
-	mux.HandleFunc("POST /agent/start", func(w http.ResponseWriter, r *http.Request) {
-		var task AgentTask
-		json.NewDecoder(r.Body).Decode(&task)
+	mux.HandleFunc("POST /agent/{tenant_id}/start", func(w http.ResponseWriter, r *http.Request) {
+		tenantID := r.PathValue("tenant_id")
 
-		res, _ := sqlflowClient.Spawn(r.Context(), sqlflow.SpawnOptions{QueueName: "ai-agent-queue"}, "solve-bug", task)
-		
+		var task AgentTask
+		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		options := sqlflow.SpawnOptions{
+			TenantID:  tenantID,
+			QueueName: "ai-agent-queue",
+		}
+		res, err := sqlflowClient.Spawn(r.Context(), options, "solve-bug", task)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"run_id": res.RunID, "task_id": res.TaskID})
+		json.NewEncoder(w).Encode(map[string]any{
+			"run_id":  res.RunID,
+			"task_id": res.TaskID,
+			"status":  fmt.Sprintf("Agent dispatched to fix Issue #%s for tenant %s", task.IssueID, tenantID),
+		})
 	})
 
-	// Endpoint 2: Resume the Agent upon Human Review
-	mux.HandleFunc("POST /agent/review/{issue_id}/{correlation_id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /agent/{tenant_id}/review/{issue_id}/{correlation_id}", func(w http.ResponseWriter, r *http.Request) {
+		tenantID := r.PathValue("tenant_id")
 		issueID := r.PathValue("issue_id")
 		correlationID := r.PathValue("correlation_id")
 
 		var approval HumanApproval
-		json.NewDecoder(r.Body).Decode(&approval)
+		if err := json.NewDecoder(r.Body).Decode(&approval); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-		eventName := fmt.Sprintf("agent-approval:%s:%s", issueID, correlationID)
-		sqlflowClient.EmitEvent(r.Context(), sqlflow.EmitEventOptions{QueueName: "ai-agent-queue"}, eventName, approval)
-		
-		w.WriteHeader(http.StatusOK)
+		eventName := fmt.Sprintf("agent-approval:%s:%s:%s", tenantID, issueID, correlationID)
+		options := sqlflow.EmitEventOptions{
+			TenantID:  tenantID,
+			QueueName: "ai-agent-queue",
+		}
+
+		err := sqlflowClient.EmitEvent(r.Context(), options, eventName, approval)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		msg := fmt.Sprintf("Fix for %s rejected. Agent will try again using feedback: '%s'", correlationID, approval.Reason)
+		if approval.Approved {
+			msg = fmt.Sprintf("Fix for %s approved. Agent is completing the work.", correlationID)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": msg})
 	})
 
-	server := &http.Server{Addr: ":8000", Handler: mux}
-	go server.ListenAndServe()
+	server := &http.Server{
+		Addr:    ":8000",
+		Handler: mux,
+	}
 
-	<-ctx.Done() // Block until shutdown signal
+	go func() {
+		log.Println("Web API is running at http://localhost:8000")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP Server Fehler: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("Shutting down system...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	server.Shutdown(shutdownCtx)
 	worker.Stop()
+	time.Sleep(500 * time.Millisecond)
+
+	log.Println("System shut down successfully.")
 }
 ```
