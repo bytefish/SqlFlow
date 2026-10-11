@@ -1,17 +1,13 @@
 package de.bytefish.sqlflow.postgres;
 
 import de.bytefish.sqlflow.core.workers.QueueSignalListener;
-
 import org.postgresql.PGConnection;
 import org.postgresql.PGNotification;
 
 import javax.sql.DataSource;
-
 import java.sql.Connection;
 import java.sql.Statement;
-
 import java.time.Duration;
-
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
@@ -19,32 +15,31 @@ import java.util.concurrent.Semaphore;
 public final class PostgresQueueSignalListener implements QueueSignalListener, AutoCloseable {
 
     private final DataSource dataSource;
-
     private final Map<String, Semaphore> queueSignals = new ConcurrentHashMap<>();
-
     private volatile boolean running = true;
-
     private volatile Thread listenerThread;
 
     public PostgresQueueSignalListener(DataSource dataSource) {
         this.dataSource = dataSource;
-
         startListener();
     }
 
     @Override
-    public void registerQueue(String queueName) {
+    public void registerQueue(String tenantId, String queueName) {
+        String key = tenantId + ":" + queueName;
         queueSignals.computeIfAbsent(
-                queueName,
+                key,
                 ignored -> new Semaphore(0));
     }
 
     @Override
     public boolean waitForSignal(
+            String tenantId,
             String queueName,
             Duration timeout)
             throws InterruptedException {
-        Semaphore semaphore = queueSignals.computeIfAbsent(queueName, key -> new Semaphore(0));
+        String key = tenantId + ":" + queueName;
+        Semaphore semaphore = queueSignals.computeIfAbsent(key, ignored -> new Semaphore(0));
 
         return semaphore.tryAcquire(
                 timeout.toMillis(),
@@ -85,29 +80,25 @@ public final class PostgresQueueSignalListener implements QueueSignalListener, A
                 try {
                     Thread.sleep(5000);
                 } catch (InterruptedException ignored) {
-                    Thread.currentThread()
-                            .interrupt();
-
+                    Thread.currentThread().interrupt();
                     return;
                 }
             }
         }
     }
 
-    private void handleNotification(
-            PGNotification notification) {
-        if (!"ssf_work_available".equals(
-                notification.getName())) {
+    private void handleNotification(PGNotification notification) {
+        if (!"ssf_work_available".equals(notification.getName())) {
             return;
         }
 
-        String queueName = notification.getParameter();
+        String key = notification.getParameter();
 
-        if (queueName == null || queueName.isBlank()) {
+        if (key == null || key.isBlank()) {
             return;
         }
 
-        Semaphore semaphore = queueSignals.get(queueName);
+        Semaphore semaphore = queueSignals.get(key);
 
         if (semaphore != null) {
             semaphore.release();
@@ -120,7 +111,6 @@ public final class PostgresQueueSignalListener implements QueueSignalListener, A
 
         if (listenerThread != null) {
             listenerThread.interrupt();
-
             listenerThread.join(10_000);
         }
     }

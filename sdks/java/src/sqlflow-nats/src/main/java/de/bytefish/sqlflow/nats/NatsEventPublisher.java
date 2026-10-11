@@ -21,20 +21,20 @@ public final class NatsEventPublisher implements IEventPublisher {
     }
 
     @Override
-    public <T> void emitEvent(String queue, String eventName, T payload) {
-        // 1. Durably save the event to the Database (The Source of Truth)
-        innerPublisher.emitEvent(queue, eventName, payload);
+    public <T> void emitEvent(String tenantId, String queue, String eventName, T payload) {
+        // 1. Durably save the event to the Database (The Source of Truth)[cite: 86]
+        innerPublisher.emitEvent(tenantId, queue, eventName, payload);
 
-        // 2. Fire the NATS wake-up ping so the worker resumes instantly
+        // 2. Fire the NATS wake-up ping so the worker resumes instantly[cite: 86]
         try {
             JetStream js = connection.jetStream();
-            String subject = "ssf.queues." + queue;
+            String subject = "ssf.tenants." + tenantId + ".queues." + queue;
 
             js.publish(subject, "ping".getBytes(StandardCharsets.UTF_8));
         } catch (Exception ex) {
-            // NATS is an optimization layer. If it's down, we log a warning and move on.
-            // The worker's smart delta polling will pick up the task on its next cycle.
-            log.warn("Failed to publish NATS wake-up signal for queue '{}'", queue, ex);
+            // NATS is an optimization layer. If it's down, we log a warning and move on.[cite: 86]
+            // The worker's smart delta polling will pick up the task on its next cycle.[cite: 86]
+            log.warn("Failed to publish NATS wake-up signal for tenant '{}' and queue '{}'", tenantId, queue, ex);
         }
     }
 }

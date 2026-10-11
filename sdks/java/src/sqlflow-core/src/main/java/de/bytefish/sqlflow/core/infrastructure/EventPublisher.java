@@ -14,14 +14,14 @@ public class EventPublisher implements IEventPublisher {
     }
 
     @Override
-    public <T> void emitEvent(String queue, String eventName, T payload) {
+    public <T> void emitEvent(String tenantId, String queue, String eventName, T payload) {
         if (eventName == null || eventName.isEmpty()) {
             throw new IllegalArgumentException("eventName required");
         }
         try {
             String payloadJson = mapper.writeValueAsString(payload);
 
-            db.emitEvent(queue, eventName, payloadJson);
+            db.emitEvent(tenantId, queue, eventName, payloadJson);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize event payload", e);
         }

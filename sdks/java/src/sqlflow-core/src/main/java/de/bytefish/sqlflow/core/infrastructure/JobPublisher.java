@@ -20,7 +20,7 @@ public class JobPublisher implements IJobPublisher {
         try {
             String paramsJson = mapper.writeValueAsString(request);
             String optionsJson = mapper.writeValueAsString(options);
-            return db.spawnTask(options.queue(), taskName, paramsJson, optionsJson);
+            return db.spawnTask(options.tenantId(), options.queue(), taskName, paramsJson, optionsJson);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize spawn request", e);
         }

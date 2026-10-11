@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 public record WorkerOptions(
+        String tenantId,
         String workerId,
         String queue,
         int claimTimeout,
@@ -16,6 +17,7 @@ public record WorkerOptions(
 ) {
     public WorkerOptions
     {
+        Objects.requireNonNull(tenantId);
         Objects.requireNonNull(workerId);
         Objects.requireNonNull(queue);
 
@@ -30,6 +32,8 @@ public record WorkerOptions(
     }
 
     public static final class Builder {
+
+        private String tenantId;
 
         private String workerId;
 
@@ -48,6 +52,11 @@ public record WorkerOptions(
         private Consumer<Exception> onError = ex -> { };
 
         private boolean fatalOnLeaseTimeout = true;
+
+        public Builder tenantId(String tenantId) {
+            this.tenantId = tenantId;
+            return this;
+        }
 
         public Builder workerId(String workerId) {
             this.workerId = workerId;
@@ -112,6 +121,7 @@ public record WorkerOptions(
 
         public WorkerOptions build() {
             return new WorkerOptions(
+                    tenantId,
                     workerId,
                     queue,
                     claimTimeout,

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 public record ClaimedTask(
+        String tenantId,
         String runId,
         String taskId,
         String taskName,
@@ -14,9 +15,9 @@ public record ClaimedTask(
         ObjectNode headers,
         String wakeEvent,
         JsonNode eventPayload
-    ) {
-        // Creates a copy of the task with a cleared wake event
-        public ClaimedTask clearWakeEvent() {
-            return new ClaimedTask(runId, taskId, taskName, attempt, params, retryStrategy, maxAttempts, headers, null, null);
-        }
+) {
+    // Creates a copy of the task with a cleared wake event
+    public ClaimedTask clearWakeEvent() {
+        return new ClaimedTask(tenantId, runId, taskId, taskName, attempt, params, retryStrategy, maxAttempts, headers, null, null);
     }
+}

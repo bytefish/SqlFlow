@@ -1,12 +1,11 @@
 package de.bytefish.sqlflow.core.infrastructure;
 
-
 import com.fasterxml.jackson.databind.ObjectMapper;
 import de.bytefish.sqlflow.core.ISqlFlow;
 import de.bytefish.sqlflow.core.models.TaskRegistrationOptions;
 
 /**
- * Provides elegant extension methods to bridge the core functional SDK
+ * Provides extension methods to bridge the core functional SDK
  * with strongly-typed Job interfaces and Dependency Injection.
  * This is the exact Java equivalent to the C# SqlFlowExtensions.UseJob method.
  */
@@ -20,6 +19,7 @@ public final class SqlFlowExtensions {
      * @param client             The core SqlFlow client.
      * @param provider           The JobFactory (equivalent to IServiceProvider in .NET) for DI resolution.
      * @param mapper             Jackson ObjectMapper for deserialization.
+     * @param tenantId           The Tenant ID the task belongs to.
      * @param taskName           The logical name of the task to register.
      * @param defaultMaxAttempts The default max attempts for retries.
      * @param jobClass           The Class definition of the Job.
@@ -29,18 +29,19 @@ public final class SqlFlowExtensions {
             ISqlFlow client,
             JobFactory provider,
             ObjectMapper mapper,
+            String tenantId,
             String taskName,
             int defaultMaxAttempts,
             Class<? extends Job<TParams, TResult>> jobClass,
             Class<TParams> paramsClass) {
 
-        TaskRegistrationOptions options = new TaskRegistrationOptions(taskName, defaultMaxAttempts);
+        TaskRegistrationOptions options = new TaskRegistrationOptions(tenantId, taskName, defaultMaxAttempts);
 
         // This is the bridge! We pass a lambda to the core client which resolves the Job at runtime.
         client.registerTask(options, (ctx, jsonParams) -> {
 
-            // 1. Resolve Job from DI Container (JobFactory)
-            Job<TParams, TResult> job = provider.getJob(jobClass);
+            // 1. Resolve Job from DI Container (JobFactory) passing the tenantId for scoping
+            Job<TParams, TResult> job = provider.getJob(ctx.getTenantId(), jobClass);
 
             // 2. Deserialize Parameters cleanly
             TParams typedParams = null;

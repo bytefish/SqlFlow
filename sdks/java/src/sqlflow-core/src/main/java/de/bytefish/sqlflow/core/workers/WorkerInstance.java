@@ -43,14 +43,17 @@ public final class WorkerInstance implements AutoCloseable
         }
 
         logger.info(
-                "Starting worker '{}' for queue '{}'.",
+                "Starting worker '{}' for queue '{}' and tenant '{}'.",
                 options.workerId(),
-                options.queue());
+                options.queue(),
+                options.tenantId());
 
         thread =
                 Thread.ofVirtual()
                         .name(
                                 "sqlflow-worker-"
+                                        + options.tenantId()
+                                        + "-"
                                         + options.queue())
                         .start(() ->
                         {
@@ -92,6 +95,11 @@ public final class WorkerInstance implements AutoCloseable
         return options.queue();
     }
 
+    public String tenantId()
+    {
+        return options.tenantId();
+    }
+
     public WorkerOptions options()
     {
         return options;
@@ -108,9 +116,10 @@ public final class WorkerInstance implements AutoCloseable
         }
 
         logger.info(
-                "Stopping worker '{}' for queue '{}'.",
+                "Stopping worker '{}' for queue '{}' and tenant '{}'.",
                 options.workerId(),
-                options.queue());
+                options.queue(),
+                options.tenantId());
 
         workerThread.interrupt();
     }

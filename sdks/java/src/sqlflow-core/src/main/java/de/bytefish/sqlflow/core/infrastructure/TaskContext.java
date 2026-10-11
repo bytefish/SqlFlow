@@ -25,6 +25,7 @@ public class TaskContext {
     private final Map<String, Integer> stepNameCounter = new HashMap<>();
     private final Logger logger;
 
+    private final String tenantId;
     private final String taskId;
     private final SqlFlowDatabase db;
     private final String queueName;
@@ -32,16 +33,21 @@ public class TaskContext {
     private final Map<String, JsonNode> checkpointCache;
     private final int claimTimeout;
 
-    private TaskContext(Logger logger, String taskId, SqlFlowDatabase db,
+    private TaskContext(Logger logger, String tenantId, String taskId, SqlFlowDatabase db,
                         String queueName, ClaimedTask task, Map<String, JsonNode> checkpointCache,
                         int claimTimeout) {
         this.logger = logger;
+        this.tenantId = tenantId;
         this.taskId = taskId;
         this.db = db;
         this.queueName = queueName;
         this.task = task;
         this.checkpointCache = checkpointCache;
         this.claimTimeout = claimTimeout;
+    }
+
+    public String getTenantId() {
+        return tenantId;
     }
 
     public String getTaskId() {
@@ -56,14 +62,14 @@ public class TaskContext {
         return task.attempt();
     }
 
-    public static TaskContext create(Logger logger, String taskId, SqlFlowDatabase db,
+    public static TaskContext create(Logger logger, String tenantId, String taskId, SqlFlowDatabase db,
                                      String queueName, ClaimedTask task, int claimTimeout) {
-        List<CheckpointRow> checkpoints = db.getCheckpointStates(queueName, task.taskId(), task.runId());
+        List<CheckpointRow> checkpoints = db.getCheckpointStates(tenantId, queueName, task.taskId(), task.runId());
         Map<String, JsonNode> cache = new HashMap<>();
         for (CheckpointRow cp : checkpoints) {
             cache.put(cp.checkpointName(), cp.state());
         }
-        return new TaskContext(logger, taskId, db, queueName, task, cache, claimTimeout);
+        return new TaskContext(logger, tenantId, taskId, db, queueName, task, cache, claimTimeout);
     }
 
     public <T> T step(String name, Class<T> returnType, Callable<T> fn) throws Exception {
@@ -78,7 +84,7 @@ public class TaskContext {
         T result = fn.call();
 
         JsonNode resultNode = MAPPER.valueToTree(result);
-        db.persistCheckpoint(queueName, task.taskId(), task.runId(),
+        db.persistCheckpoint(tenantId, queueName, task.taskId(), task.runId(),
                 checkpointName, resultNode.toString(), claimTimeout);
         checkpointCache.put(checkpointName, resultNode);
 
@@ -107,7 +113,7 @@ public class TaskContext {
             throw new TimeoutErrorException("Timed out waiting for event: " + eventName);
         }
 
-        SqlFlowDatabase.EventResult result = db.awaitEvent(queueName, task.taskId(), task.runId(), checkpointName, eventName, timeout);
+        SqlFlowDatabase.EventResult result = db.awaitEvent(tenantId, queueName, task.taskId(), task.runId(), checkpointName, eventName, timeout);
 
         if (!result.shouldSuspend()) {
             checkpointCache.put(checkpointName, result.payload());
@@ -124,7 +130,7 @@ public class TaskContext {
         if (checkpointCache.containsKey(checkpointName)) {
             return Optional.ofNullable(checkpointCache.get(checkpointName));
         }
-        JsonNode state = db.getSingleCheckpoint(queueName, task.taskId(), checkpointName);
+        JsonNode state = db.getSingleCheckpoint(tenantId, queueName, task.taskId(), checkpointName);
         if (state != null) {
             checkpointCache.put(checkpointName, state);
         }

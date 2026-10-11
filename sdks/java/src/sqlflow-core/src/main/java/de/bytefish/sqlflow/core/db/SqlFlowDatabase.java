@@ -1,6 +1,5 @@
 package de.bytefish.sqlflow.core.db;
 
-
 import com.fasterxml.jackson.databind.JsonNode;
 import de.bytefish.sqlflow.core.models.CheckpointRow;
 import de.bytefish.sqlflow.core.models.ClaimedTask;
@@ -12,43 +11,43 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 public interface SqlFlowDatabase {
-    void createQueue(String queueName);
+    void createQueue(String tenantId, String queueName);
 
-    void dropQueue(String queueName);
+    void dropQueue(String tenantId, String queueName);
 
-    List<String> listQueues();
+    List<String> listQueues(String tenantId);
 
-    SpawnResult spawnTask(String queue, String taskName, String paramsJson, String optionsJson);
+    SpawnResult spawnTask(String tenantId, String queue, String taskName, String paramsJson, String optionsJson);
 
-    void cancelTask(String queue, String taskId);
+    void cancelTask(String tenantId, String queue, String taskId);
 
-    void emitEvent(String queue, String eventName, String payloadJson);
+    void emitEvent(String tenantId, String queue, String eventName, String payloadJson);
 
-    List<ClaimedTask> claimTasks(String queue, String workerId, int timeout, int count);
+    List<ClaimedTask> claimTasks(String tenantId, String queue, String workerId, int timeout, int count);
 
-    void completeRun(String queue, String runId, String resultJson);
+    void completeRun(String tenantId, String queue, String runId, String resultJson);
 
-    void failRun(String queue, String runId, String errorJson);
+    void failRun(String tenantId, String queue, String runId, String errorJson);
 
-    List<CheckpointRow> getCheckpointStates(String queue, String taskId, String runId);
+    List<CheckpointRow> getCheckpointStates(String tenantId, String queue, String taskId, String runId);
 
-    JsonNode getSingleCheckpoint(String queue, String taskId, String checkpointName);
+    JsonNode getSingleCheckpoint(String tenantId, String queue, String taskId, String checkpointName);
 
-    void persistCheckpoint(String queue, String taskId, String runId, String checkpointName, String stateJson, int timeout);
+    void persistCheckpoint(String tenantId, String queue, String taskId, String runId, String checkpointName, String stateJson, int timeout);
 
-    void scheduleRun(String queue, String runId, Instant wakeAt);
+    void scheduleRun(String tenantId, String queue, String runId, Instant wakeAt);
 
-    void heartbeat(String queue, String runId, int seconds);
+    void heartbeat(String tenantId, String queue, String runId, int seconds);
 
-    EventResult awaitEvent(String queue, String taskId, String runId, String checkpointName, String eventName, Integer timeout);
+    EventResult awaitEvent(String tenantId, String queue, String taskId, String runId, String checkpointName, String eventName, Integer timeout);
 
-    void releaseWorkerClaims(String queue, String workerId);
+    void releaseWorkerClaims(String tenantId, String queue, String workerId);
 
-    Integer cleanupTasks(String queue, int ttlSeconds, int limit);
+    Integer cleanupTasks(String tenantId, String queue, int ttlSeconds, int limit);
 
-    Integer cleanupEvents(String queue, int ttlSeconds, int limit);
+    Integer cleanupEvents(String tenantId, String queue, int ttlSeconds, int limit);
 
-     OffsetDateTime getNextAvailableAt(String queue);
+    OffsetDateTime getNextAvailableAt(String tenantId, String queue);
 
     record EventResult(boolean shouldSuspend, JsonNode payload) {}
 }

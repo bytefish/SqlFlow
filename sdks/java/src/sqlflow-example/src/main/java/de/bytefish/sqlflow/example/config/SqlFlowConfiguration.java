@@ -57,7 +57,12 @@ public class SqlFlowConfiguration {
 
     @Bean
     public JobFactory springJobFactory(ApplicationContext context) {
-        return context::getBean;
+        return new JobFactory() {
+            @Override
+            public <T> T getJob(String tenantId, Class<T> jobType) {
+                return context.getBean(jobType);
+            }
+        };
     }
 
     @Bean
@@ -70,10 +75,13 @@ public class SqlFlowConfiguration {
 
         ISqlFlow client = new SqlFlow(db, mapper);
 
-        client.createQueue("ai-agent-queue");
+        String tenantId = "tenant-alpha";
+
+        client.createQueue(tenantId, "ai-agent-queue");
         client.useJob(
                 jobFactory,
                 mapper,
+                tenantId,
                 "solve-bug",
                 3,
                 AutonomousAgentJob.class,
@@ -104,6 +112,7 @@ public class SqlFlowConfiguration {
     public WorkerInstance aiWorkflow(SqlFlowDispatcher dispatcher) {
         WorkerOptions options =
                 WorkerOptions.builder()
+                        .tenantId("tenant-alpha")
                         .workerId("spring-worker-1")
                         .queue("ai-agent-queue")
                         .concurrency(10)

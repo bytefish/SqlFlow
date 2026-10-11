@@ -12,6 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class SqlFlowRegistry {
 
     private final Map<String, JobRoute> routes = new ConcurrentHashMap<>();
+
     private final Map<String, List<RegistrationDelegate>> jobRegistrationsByQueue = new ConcurrentHashMap<>();
     private final List<WorkerConfiguration> workerConfigs = new CopyOnWriteArrayList<>();
 
@@ -31,8 +32,9 @@ public class SqlFlowRegistry {
     public List<WorkerConfiguration> getWorkerConfigs() {
         return workerConfigs;
     }
-    
-    public void addRegistration(String queue, RegistrationDelegate delegate) {
-        jobRegistrationsByQueue.computeIfAbsent(queue, k -> new CopyOnWriteArrayList<>()).add(delegate);
+
+    public void addRegistration(String tenantId, String queue, RegistrationDelegate delegate) {
+        String key = tenantId + ":" + queue;
+        jobRegistrationsByQueue.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(delegate);
     }
 }

@@ -1,4 +1,4 @@
-package de.bytefish.sqlflow.sqlserver;
+package de.bytefish.sqlflow.nats;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -12,9 +12,6 @@ import de.bytefish.sqlflow.core.workers.DefaultSqlFlowDispatcher;
 import de.bytefish.sqlflow.core.workers.SqlFlowDispatcher;
 import de.bytefish.sqlflow.core.workers.WorkerInstance;
 import de.bytefish.sqlflow.core.workers.WorkerOptions;
-import de.bytefish.sqlflow.nats.NatsEventPublisher;
-import de.bytefish.sqlflow.nats.NatsJobPublisher;
-import de.bytefish.sqlflow.nats.NatsQueueSignalListener;
 import io.nats.client.Connection;
 import io.nats.client.Nats;
 import org.junit.jupiter.api.*;

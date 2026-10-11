@@ -1,3 +1,3 @@
 package de.bytefish.sqlflow.core.models;
 
-public record CancelTaskOptions(String queue) {}
+public record CancelTaskOptions(String tenantId, String queue) {}

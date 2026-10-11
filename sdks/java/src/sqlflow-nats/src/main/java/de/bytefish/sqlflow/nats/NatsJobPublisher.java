@@ -24,17 +24,17 @@ public final class NatsJobPublisher implements IJobPublisher {
 
     @Override
     public <TRequest> SpawnResult spawn(SpawnOptions options, String taskName, TRequest request) {
-        // 1. Durably save the task to the Database
+        // 1. Durably save the task to the Database[cite: 87]
         SpawnResult result = innerPublisher.spawn(options, taskName, request);
 
-        // 2. Fire the NATS wake-up ping so an idle worker picks up the new job instantly
+        // 2. Fire the NATS wake-up ping so an idle worker picks up the new job instantly[cite: 87]
         try {
             JetStream js = connection.jetStream();
-            String subject = "ssf.queues." + options.queue();
+            String subject = "ssf.tenants." + options.tenantId() + ".queues." + options.queue();
 
             js.publish(subject, "ping".getBytes(StandardCharsets.UTF_8));
         } catch (Exception ex) {
-            log.warn("Failed to publish NATS wake-up signal for spawned task in queue '{}'", options.queue(), ex);
+            log.warn("Failed to publish NATS wake-up signal for spawned task in tenant '{}' and queue '{}'", options.tenantId(), options.queue(), ex);
         }
 
         return result;

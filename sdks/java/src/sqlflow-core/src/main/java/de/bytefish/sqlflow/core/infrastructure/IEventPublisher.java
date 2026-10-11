@@ -1,5 +1,5 @@
 package de.bytefish.sqlflow.core.infrastructure;
 
 public interface IEventPublisher {
-    <T> void emitEvent(String queue, String eventName, T payload);
+    <T> void emitEvent(String tenantId, String queue, String eventName, T payload);
 }

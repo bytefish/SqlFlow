@@ -27,7 +27,7 @@ public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
 
     @Override
     public AgentResult execute(TaskContext ctx, AgentTask task) throws Exception {
-        logger.info("Agent starts researching ticket {}", task.issueId());
+        logger.info("Agent starts researching ticket {} for tenant {}", task.issueId(), ctx.getTenantId());
 
         Issue bugReport = ctx.step("fetch-issue-context", Issue.class, () ->
                 gitHubService.getIssueDetails(task.issueId())
@@ -43,7 +43,7 @@ public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
 
             logger.info("Attempt {}/3: Generating a fix based on: {}", attempt, lastFeedback);
 
-            final String currentFeedback = lastFeedback; // Für Lambda effectively final machen
+            final String currentFeedback = lastFeedback;
 
             Solution proposedFix = ctx.step("generate-code-fix-" + attempt, Solution.class, () ->
                     llmService.generateFix(bugReport.stackTrace(), currentFeedback)
@@ -58,7 +58,7 @@ public class AutonomousAgentJob implements Job<AgentTask, AgentResult> {
             logger.info("Review for {} has been requested. Agent goes idle and waits for the code review...", correlationId);
 
             Optional<JsonNode> reviewOpt = ctx.awaitEvent(
-                    "agent-approval:" + task.issueId() + ":" + correlationId,
+                    "agent-approval:" + ctx.getTenantId() + ":" + task.issueId() + ":" + correlationId,
                     "wait-for-human-review-" + attempt,
                     null,
                     JsonNode.class

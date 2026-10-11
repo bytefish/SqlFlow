@@ -9,14 +9,13 @@ import de.bytefish.sqlflow.core.models.*;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-
 public interface ISqlFlow {
 
-    void createQueue(String queueName);
+    void createQueue(String tenantId, String queueName);
 
-    void dropQueue(String queueName);
+    void dropQueue(String tenantId, String queueName);
 
-    List<String> listQueues();
+    List<String> listQueues(String tenantId);
 
     /**
      * Registers a functional task handler with the SqlFlow client.
@@ -29,19 +28,20 @@ public interface ISqlFlow {
 
     void cancelTask(CancelTaskOptions options, String taskId);
 
-    List<ClaimedTask> claimTasks(String queue, String workerId, int claimTimeout, int batchSize);
+    List<ClaimedTask> claimTasks(String tenantId, String queue, String workerId, int claimTimeout, int batchSize);
 
-    void workBatch(String queue, String workerId, int claimTimeout, int batchSize);
+    void workBatch(String tenantId, String queue, String workerId, int claimTimeout, int batchSize);
 
-    void executeTask(ClaimedTask task, String queue, int claimTimeout, boolean fatalOnLeaseTimeout);
+    void executeTask(ClaimedTask task, String tenantId, String queue, int claimTimeout, boolean fatalOnLeaseTimeout);
 
-    OffsetDateTime getNextAvailableAt(String queue);
+    OffsetDateTime getNextAvailableAt(String tenantId, String queue);
 
     /**
      * Provides an elegant default method to bridge the core functional SDK with strongly-typed Job interfaces and Dependency Injection.
      *
      * @param provider           The JobFactory (equivalent to IServiceProvider in .NET) for DI resolution.
      * @param mapper             Jackson ObjectMapper for deserialization.
+     * @param tenantId           The Tenant ID the task belongs to.
      * @param taskName           The logical name of the task to register.
      * @param defaultMaxAttempts The default max attempts for retries.
      * @param jobClass           The Class definition of the Job.
@@ -50,15 +50,16 @@ public interface ISqlFlow {
     default <TParams, TResult> void useJob(
             JobFactory provider,
             ObjectMapper mapper,
+            String tenantId,
             String taskName,
             int defaultMaxAttempts,
             Class<? extends Job<TParams, TResult>> jobClass,
             Class<TParams> paramsClass) {
 
-        TaskRegistrationOptions options = new TaskRegistrationOptions(taskName, defaultMaxAttempts);
+        TaskRegistrationOptions options = new TaskRegistrationOptions(tenantId, taskName, defaultMaxAttempts);
 
         this.registerTask(options, (ctx, jsonParams) -> {
-            Job<TParams, TResult> job = provider.getJob(jobClass);
+            Job<TParams, TResult> job = provider.getJob(ctx.getTenantId(), jobClass);
 
             TParams typedParams = null;
 

@@ -49,18 +49,18 @@ public class SqlFlow implements ISqlFlow {
     }
 
     @Override
-    public void createQueue(String queueName) {
-        db.createQueue(queueName);
+    public void createQueue(String tenantId, String queueName) {
+        db.createQueue(tenantId, queueName);
     }
 
     @Override
-    public void dropQueue(String queueName) {
-        db.dropQueue(queueName);
+    public void dropQueue(String tenantId, String queueName) {
+        db.dropQueue(tenantId, queueName);
     }
 
     @Override
-    public List<String> listQueues() {
-        return db.listQueues();
+    public List<String> listQueues(String tenantId) {
+        return db.listQueues(tenantId);
     }
 
     @Override
@@ -68,54 +68,58 @@ public class SqlFlow implements ISqlFlow {
         if (options.name() == null || options.name().isEmpty()) {
             throw new IllegalArgumentException("Task registration requires a name");
         }
-        taskHandlers.put(options.name(), handler);
+        // Schlüssel im Handler-Registry berücksichtigt nun tenantId und Taskname
+        String key = options.tenantId() + ":" + options.name();
+        taskHandlers.put(key, handler);
     }
 
     @Override
     public <TRequest> SpawnResult spawn(SpawnOptions options, String taskName, TRequest request) {
-        // Delegates to the injected publisher (Native DB or NATS Decorator)
         return jobPublisher.spawn(options, taskName, request);
     }
 
     @Override
     public void emitEvent(EmitEventOptions options, String eventName, Object payload) {
-        // Delegates to the injected publisher (Native DB or NATS Decorator)
-        eventPublisher.emitEvent(options.queue(), eventName, payload);
+        eventPublisher.emitEvent(options.tenantId(), options.queue(), eventName, payload);
     }
 
     @Override
     public void cancelTask(CancelTaskOptions options, String taskId) {
-        db.cancelTask(options.queue(), taskId);
+        db.cancelTask(options.tenantId(), options.queue(), taskId);
     }
 
     @Override
-    public List<ClaimedTask> claimTasks(String queue, String workerId, int claimTimeout, int batchSize) {
+    public List<ClaimedTask> claimTasks(String tenantId, String queue, String workerId, int claimTimeout, int batchSize) {
         if (queue == null || queue.isEmpty()) {
             throw new IllegalArgumentException("Queue must be specified for claiming tasks");
         }
-        return db.claimTasks(queue, workerId, claimTimeout, batchSize);
+        return db.claimTasks(tenantId, queue, workerId, claimTimeout, batchSize);
     }
 
     @Override
-    public void workBatch(String queue, String workerId, int claimTimeout, int batchSize) {
-        List<ClaimedTask> tasks = claimTasks(queue, workerId, claimTimeout, batchSize);
+    public void workBatch(String tenantId, String queue, String workerId, int claimTimeout, int batchSize) {
+        List<ClaimedTask> tasks = claimTasks(tenantId, queue, workerId, claimTimeout, batchSize);
         for (ClaimedTask task : tasks) {
-            executeTask(task, queue, claimTimeout, true);
+            executeTask(task, tenantId, queue, claimTimeout, true);
         }
     }
+
     @Override
     public void executeTask(
             ClaimedTask task,
+            String tenantId,
             String queue,
             int claimTimeout,
             boolean fatalOnLeaseTimeout) {
 
-        TaskHandler handler = taskHandlers.get(task.taskName());
+        String handlerKey = tenantId + ":" + task.taskName();
+        TaskHandler handler = taskHandlers.get(handlerKey);
 
         if (handler == null) {
             logger.error(
-                    "No handler registered for task: {}",
-                    task.taskName()
+                    "No handler registered for task: {} and tenant: {}",
+                    task.taskName(),
+                    tenantId
             );
 
             try {
@@ -126,6 +130,7 @@ public class SqlFlow implements ISqlFlow {
                 );
 
                 db.failRun(
+                        tenantId,
                         queue,
                         task.runId(),
                         mapper.writeValueAsString(errNode)
@@ -139,6 +144,7 @@ public class SqlFlow implements ISqlFlow {
 
         TaskContext ctx = TaskContext.create(
                 logger,
+                tenantId,
                 task.taskId(),
                 db,
                 queue,
@@ -176,16 +182,12 @@ public class SqlFlow implements ISqlFlow {
                     mapper.writeValueAsString(result);
 
             db.completeRun(
+                    tenantId,
                     queue,
                     task.runId(),
                     resultJson
             );
         } catch (Exception ex) {
-            /*
-             * Search the complete cause chain for expected
-             * control-flow exceptions. CompletableFuture may wrap
-             * these in ExecutionException or CompletionException.
-             */
             Throwable current = ex;
             Throwable controlFlowCause = null;
 
@@ -201,25 +203,15 @@ public class SqlFlow implements ISqlFlow {
 
             if (controlFlowCause != null) {
                 logger.debug(
-                        "Task control flow detected: taskId={}, runId={}, exception={}",
+                        "Task control flow detected: tenantId={}, taskId={}, runId={}, exception={}",
+                        tenantId,
                         task.taskId(),
                         task.runId(),
                         controlFlowCause.getClass().getName()
                 );
-
-                /*
-                 * Do not call completeRun() or failRun().
-                 *
-                 * For SuspendTaskException, awaitEvent() has already
-                 * changed the run and task to sleeping in the database.
-                 */
                 return;
             }
 
-            /*
-             * Unwrap the standard CompletableFuture wrappers for
-             * accurate logging and failure persistence.
-             */
             Throwable cause = ex;
 
             if ((ex instanceof ExecutionException || ex instanceof CompletionException)
@@ -229,9 +221,10 @@ public class SqlFlow implements ISqlFlow {
 
             if (cause instanceof TimeoutException) {
                 logger.error(
-                        "Task {} ({}) exceeded claim timeout by 2x.",
+                        "Task {} ({}) for tenant {} exceeded claim timeout by 2x.",
                         task.taskName(),
-                        task.taskId()
+                        task.taskId(),
+                        tenantId
                 );
 
                 throw new RuntimeException(
@@ -241,7 +234,8 @@ public class SqlFlow implements ISqlFlow {
             }
 
             logger.error(
-                    "[ssf] task execution failed: {}",
+                    "[ssf] task execution failed for tenant {}: {}",
+                    tenantId,
                     cause.getMessage()
             );
 
@@ -271,6 +265,7 @@ public class SqlFlow implements ISqlFlow {
                 );
 
                 db.failRun(
+                        tenantId,
                         queue,
                         task.runId(),
                         mapper.writeValueAsString(errorNode)
@@ -285,11 +280,11 @@ public class SqlFlow implements ISqlFlow {
     }
 
     @Override
-    public OffsetDateTime getNextAvailableAt(String queue) {
+    public OffsetDateTime getNextAvailableAt(String tenantId, String queue) {
         if (queue == null || queue.trim().isEmpty()) {
             throw new IllegalArgumentException("Queue must be specified");
         }
 
-        return db.getNextAvailableAt(queue);
+        return db.getNextAvailableAt(tenantId, queue);
     }
 }

@@ -39,23 +39,26 @@ public final class DefaultSqlFlowDispatcher implements SqlFlowDispatcher {
             WorkerOptions options) {
         validateOptions(options);
 
-        if (!activeQueues.add(
-                options.queue())) {
+        String queueKey = options.tenantId() + ":" + options.queue();
+
+        if (!activeQueues.add(queueKey)) {
             throw new IllegalStateException(
                     "A worker for queue '"
                             + options.queue()
+                            + "' and tenant '"
+                            + options.tenantId()
                             + "' is already running.");
         }
 
         try {
             signals.registerQueue(
+                    options.tenantId(),
                     options.queue());
 
             runQueue(
                     options);
         } finally {
-            activeQueues.remove(
-                    options.queue());
+            activeQueues.remove(queueKey);
         }
     }
 
@@ -127,7 +130,7 @@ public final class DefaultSqlFlowDispatcher implements SqlFlowDispatcher {
                     boolean skipWait = false;
 
                     try {
-                        OffsetDateTime nextAvailableAt = client.getNextAvailableAt(options.queue());
+                        OffsetDateTime nextAvailableAt = client.getNextAvailableAt(options.tenantId(), options.queue());
 
                         if (nextAvailableAt != null) {
                             Duration timeUntilNextJob = Duration.between(OffsetDateTime.now(ZoneOffset.UTC), nextAvailableAt);
@@ -140,13 +143,15 @@ public final class DefaultSqlFlowDispatcher implements SqlFlowDispatcher {
                         }
                     } catch (Exception ex) {
                         logger.warn(
-                                "Failed to retrieve next available time for queue '{}'. Falling back to default reconciliation interval.",
+                                "Failed to retrieve next available time for queue '{}' and tenant '{}'. Falling back to default reconciliation interval.",
                                 options.queue(),
+                                options.tenantId(),
                                 ex);
                     }
 
                     if (!skipWait && delay.toMillis() > 0) {
                         signals.waitForSignal(
+                                options.tenantId(),
                                 options.queue(),
                                 delay);
                     }
@@ -203,6 +208,7 @@ public final class DefaultSqlFlowDispatcher implements SqlFlowDispatcher {
             }
 
             List<ClaimedTask> tasks = client.claimTasks(
+                    options.tenantId(),
                     options.queue(),
                     options.workerId(),
                     options.claimTimeout(),
@@ -246,6 +252,7 @@ public final class DefaultSqlFlowDispatcher implements SqlFlowDispatcher {
                 try {
                     client.executeTask(
                             task,
+                            options.tenantId(),
                             options.queue(),
                             options.claimTimeout(),
                             options.fatalOnLeaseTimeout());
@@ -285,14 +292,16 @@ public final class DefaultSqlFlowDispatcher implements SqlFlowDispatcher {
             }
         } catch (Exception callbackException) {
             logger.error(
-                    "Worker error callback failed for queue '{}'",
+                    "Worker error callback failed for queue '{}' and tenant '{}'",
                     options.queue(),
+                    options.tenantId(),
                     callbackException);
         }
 
         logger.error(
-                "Worker error in queue '{}'",
+                "Worker error in queue '{}' and tenant '{}'",
                 options.queue(),
+                options.tenantId(),
                 exception);
     }
 

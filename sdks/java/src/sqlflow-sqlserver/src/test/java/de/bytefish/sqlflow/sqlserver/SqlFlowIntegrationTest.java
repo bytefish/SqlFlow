@@ -52,6 +52,7 @@ public class SqlFlowIntegrationTest {
 
     private static final String DATABASE_NAME = "SqlFlow";
     private static final String SA_PASSWORD = "SuperStrongPasswort@!";
+    private static final String TENANT_ID = "tenant-test";
     private static final String QUEUE = "test-queue";
     private static final String WORKER_ID = "test-worker-1";
 
@@ -99,7 +100,7 @@ public class SqlFlowIntegrationTest {
     void setup() {
         db = new SqlServerFlowDatabase(dataSource, mapper);
         sqlFlow = new SqlFlow(db, mapper);
-        sqlFlow.createQueue(QUEUE);
+        sqlFlow.createQueue(TENANT_ID, QUEUE);
 
         signals = new SqlServerQueueSignalListener(dataSource);
         dispatcher = new DefaultSqlFlowDispatcher(
@@ -117,13 +118,11 @@ public class SqlFlowIntegrationTest {
     }
 
     private static Path resolveSqlScript(String fileName) {
-        // Maven execution from the Java module root.
         Path sqlFilePath = Paths.get(
                 "../../../../sql",
                 fileName
         ).normalize().toAbsolutePath();
 
-        // Fallback for execution from the repository root.
         if (!Files.exists(sqlFilePath)) {
             sqlFilePath = Paths.get(
                     "sql",
@@ -251,6 +250,7 @@ public class SqlFlowIntegrationTest {
     private WorkerInstance createWorker() {
         WorkerInstance worker = new WorkerInstance(
                 WorkerOptions.builder()
+                        .tenantId(TENANT_ID)
                         .workerId(WORKER_ID)
                         .queue(QUEUE)
                         .claimTimeout(120)
@@ -270,7 +270,7 @@ public class SqlFlowIntegrationTest {
         CompletableFuture<Integer> completionSource = new CompletableFuture<>();
 
         sqlFlow.registerTask(
-                new TaskRegistrationOptions("add-numbers", 3),
+                new TaskRegistrationOptions(TENANT_ID, "add-numbers", 3),
                 (ctx, parameters) -> {
                     if (parameters == null || parameters.isNull()) {
                         throw new IllegalStateException("Expected JSON parameters");
@@ -284,7 +284,7 @@ public class SqlFlowIntegrationTest {
                 }
         );
 
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
         sqlFlow.spawn(options, "add-numbers", new MathParams(10, 20));
 
         WorkerInstance worker = createWorker();
@@ -308,7 +308,7 @@ public class SqlFlowIntegrationTest {
         AtomicBoolean shouldCrash = new AtomicBoolean(true);
 
         sqlFlow.registerTask(
-                new TaskRegistrationOptions("checkpoint-task", 3),
+                new TaskRegistrationOptions(TENANT_ID, "checkpoint-task", 3),
                 (ctx, parameters) -> {
                     ctx.step("charge-card", step1Count::incrementAndGet);
 
@@ -322,7 +322,7 @@ public class SqlFlowIntegrationTest {
                 }
         );
 
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
         SpawnResult spawnResult = sqlFlow.spawn(
                 options,
                 "checkpoint-task",
@@ -360,7 +360,7 @@ public class SqlFlowIntegrationTest {
         CompletableFuture<String> paymentRef = new CompletableFuture<>();
 
         sqlFlow.registerTask(
-                new TaskRegistrationOptions("event-task", 3),
+                new TaskRegistrationOptions(TENANT_ID, "event-task", 3),
                 (ctx, parameters) -> {
                     String orderId = parameters.get("orderId").asText();
 
@@ -380,7 +380,7 @@ public class SqlFlowIntegrationTest {
                 }
         );
 
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
         SpawnResult spawnResult = sqlFlow.spawn(
                 options,
                 "event-task",
@@ -401,7 +401,7 @@ public class SqlFlowIntegrationTest {
             );
 
             sqlFlow.emitEvent(
-                    new EmitEventOptions(QUEUE),
+                    new EmitEventOptions(TENANT_ID, QUEUE),
                     "payment-999",
                     new PaymentEvent(true, "TX-12345")
             );
@@ -426,7 +426,7 @@ public class SqlFlowIntegrationTest {
     @Test
     @Order(4)
     void testCancelTask() throws Exception {
-        SpawnOptions options = new SpawnOptions(QUEUE, 3, null, null);
+        SpawnOptions options = new SpawnOptions(TENANT_ID, QUEUE, 3, null, null);
         SpawnResult spawnResult = sqlFlow.spawn(
                 options,
                 "dummy-task",
@@ -434,7 +434,7 @@ public class SqlFlowIntegrationTest {
         );
 
         sqlFlow.cancelTask(
-                new CancelTaskOptions(QUEUE),
+                new CancelTaskOptions(TENANT_ID, QUEUE),
                 spawnResult.taskId()
         );
 
@@ -464,10 +464,11 @@ public class SqlFlowIntegrationTest {
     private String getTaskState(String taskId) throws SQLException {
         try (java.sql.Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(
-                     "SELECT state FROM ssf.tasks WHERE task_id = CAST(? AS UNIQUEIDENTIFIER)"
+                     "SELECT state FROM ssf.tasks WHERE tenant_id = ? AND task_id = CAST(? AS UNIQUEIDENTIFIER)"
              )) {
 
-            statement.setString(1, taskId);
+            statement.setString(1, TENANT_ID);
+            statement.setString(2, taskId);
 
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (resultSet.next()) {

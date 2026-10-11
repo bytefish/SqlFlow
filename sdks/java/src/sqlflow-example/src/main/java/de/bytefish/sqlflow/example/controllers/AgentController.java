@@ -20,28 +20,31 @@ public class AgentController {
         this.sqlFlow = sqlFlow;
     }
 
-    @PostMapping("/start")
+    @PostMapping("/{tenantId}/start")
     public Map<String, String> startAgent(
+            @PathVariable("tenantId") String tenantId,
             @RequestBody AgentTask task) {
 
-        SpawnResult result = sqlFlow.spawn(new SpawnOptions("ai-agent-queue", null, null, null), "solve-bug", task);
+        SpawnResult result = sqlFlow.spawn(new SpawnOptions(tenantId, "ai-agent-queue", null, null, null), "solve-bug", task);
 
         return Map.of(
+                "tenantId", tenantId,
                 "runId", result.runId(),
                 "taskId", result.taskId(),
-                "status", "Agent dispatched to fix Issue #" + task.issueId());
+                "status", "Agent dispatched to fix Issue #" + task.issueId() + " for tenant " + tenantId);
     }
 
-    @PostMapping("/review/{issueId}/{correlationId}")
+    @PostMapping("/{tenantId}/review/{issueId}/{correlationId}")
     public Map<String, String> review(
+            @PathVariable("tenantId") String tenantId,
             @PathVariable("issueId") String issueId,
             @PathVariable("correlationId") String correlationId,
             @RequestBody HumanApproval approval) {
 
-        String eventName = "agent-approval:" + issueId + ":" + correlationId;
+        String eventName = "agent-approval:" + tenantId + ":" + issueId + ":" + correlationId;
 
         sqlFlow.emitEvent(
-                new EmitEventOptions("ai-agent-queue"),
+                new EmitEventOptions(tenantId, "ai-agent-queue"),
                 eventName,
                 approval);
 

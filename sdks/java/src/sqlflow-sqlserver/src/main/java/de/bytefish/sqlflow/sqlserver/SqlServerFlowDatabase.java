@@ -29,10 +29,11 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void createQueue(String queueName) {
+    public void createQueue(String tenantId, String queueName) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.create_queue ?, 'unpartitioned'")) {
-                cmd.setString(1, queueName);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.create_queue ?, ?, 'unpartitioned'")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queueName);
                 cmd.executeUpdate();
                 return null;
             }
@@ -40,10 +41,11 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void dropQueue(String queueName) {
+    public void dropQueue(String tenantId, String queueName) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.drop_queue ?")) {
-                cmd.setString(1, queueName);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.drop_queue ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queueName);
                 cmd.executeUpdate();
                 return null;
             }
@@ -51,24 +53,27 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public List<String> listQueues() {
+    public List<String> listQueues(String tenantId) {
         return execute(conn -> {
             List<String> results = new ArrayList<>();
-            try (PreparedStatement cmd = conn.prepareStatement("SELECT queue_name FROM ssf.queues ORDER BY queue_name");
-                 ResultSet rs = cmd.executeQuery()) {
-                while (rs.next()) results.add(rs.getString(1));
-                return results;
+            try (PreparedStatement cmd = conn.prepareStatement("SELECT queue_name FROM ssf.queues WHERE tenant_id = ? ORDER BY queue_name")) {
+                cmd.setString(1, tenantId);
+                try (ResultSet rs = cmd.executeQuery()) {
+                    while (rs.next()) results.add(rs.getString(1));
+                    return results;
+                }
             }
         });
     }
 
     @Override
-    public OffsetDateTime getNextAvailableAt(String queue) {
+    public OffsetDateTime getNextAvailableAt(String tenantId, String queue) {
         return execute(conn -> {
-            String sql = "EXEC ssf.get_next_available_at ?";
+            String sql = "EXEC ssf.get_next_available_at ?, ?";
 
             try (PreparedStatement cmd = conn.prepareStatement(sql)) {
-                cmd.setString(1, queue);
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
 
                 try (ResultSet rs = cmd.executeQuery()) {
                     if (rs.next()) {
@@ -81,18 +86,18 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public SpawnResult spawnTask(String queue, String taskName, String paramsJson, String optionsJson) {
+    public SpawnResult spawnTask(String tenantId, String queue, String taskName, String paramsJson, String optionsJson) {
         return execute(conn -> {
-            // SQL Server uses EXEC for procs with side effects that return result sets
-            String sql = "EXEC ssf.spawn_task ?, ?, ?, ?";
+            String sql = "EXEC ssf.spawn_task ?, ?, ?, ?, ?";
             try (PreparedStatement cmd = conn.prepareStatement(sql)) {
-                cmd.setString(1, queue);
-                cmd.setString(2, taskName);
-                cmd.setString(3, paramsJson);
-                cmd.setString(4, optionsJson);
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, taskName);
+                cmd.setString(4, paramsJson);
+                cmd.setString(5, optionsJson);
 
                 try (ResultSet rs = cmd.executeQuery()) {
-                    if (rs.next()) return new SpawnResult(rs.getString(1), rs.getString(2), rs.getInt(3));
+                    if (rs.next()) return new SpawnResult(tenantId, rs.getString(1), rs.getString(2), rs.getInt(3));
                     throw new RuntimeException("Failed to spawn task");
                 }
             }
@@ -100,15 +105,16 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public List<ClaimedTask> claimTasks(String queue, String workerId, int timeout, int count) {
+    public List<ClaimedTask> claimTasks(String tenantId, String queue, String workerId, int timeout, int count) {
         return execute(conn -> {
             List<ClaimedTask> tasks = new ArrayList<>();
-            String sql = "EXEC ssf.claim_task ?, ?, ?, ?";
+            String sql = "EXEC ssf.claim_task ?, ?, ?, ?, ?";
             try (PreparedStatement cmd = conn.prepareStatement(sql)) {
-                cmd.setString(1, queue);
-                cmd.setString(2, workerId);
-                cmd.setInt(3, timeout);
-                cmd.setInt(4, count);
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, workerId);
+                cmd.setInt(4, timeout);
+                cmd.setInt(5, count);
 
                 try (ResultSet rs = cmd.executeQuery()) {
                     while (rs.next()) {
@@ -119,6 +125,7 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
                         ObjectNode headersNode = (parsedHeaders instanceof ObjectNode obj) ? obj : null;
 
                         tasks.add(new ClaimedTask(
+                                tenantId,
                                 rs.getString(1), rs.getString(2), rs.getString(4), rs.getInt(3),
                                 parseJson(rs, 5), parseJson(rs, 6), finalMaxAttempts, headersNode,
                                 rs.getString(9), parseJson(rs, 10)
@@ -131,15 +138,16 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void persistCheckpoint(String queue, String taskId, String runId, String checkpointName, String stateJson, int timeout) {
+    public void persistCheckpoint(String tenantId, String queue, String taskId, String runId, String checkpointName, String stateJson, int timeout) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.set_task_checkpoint_state ?, ?, ?, ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(taskId).toString());
-                cmd.setString(3, checkpointName);
-                cmd.setString(4, stateJson);
-                cmd.setString(5, UUID.fromString(runId).toString());
-                cmd.setInt(6, timeout);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.set_task_checkpoint_state ?, ?, ?, ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(taskId).toString());
+                cmd.setString(4, checkpointName);
+                cmd.setString(5, stateJson);
+                cmd.setString(6, UUID.fromString(runId).toString());
+                cmd.setInt(7, timeout);
                 cmd.executeUpdate();
                 return null;
             }
@@ -147,17 +155,18 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public EventResult awaitEvent(String queue, String taskId, String runId, String checkpointName, String eventName, Integer timeout) {
+    public EventResult awaitEvent(String tenantId, String queue, String taskId, String runId, String checkpointName, String eventName, Integer timeout) {
         return execute(conn -> {
-            String sql = "EXEC ssf.await_event ?, ?, ?, ?, ?, ?";
+            String sql = "EXEC ssf.await_event ?, ?, ?, ?, ?, ?, ?";
             try (PreparedStatement cmd = conn.prepareStatement(sql)) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(taskId).toString());
-                cmd.setString(3, UUID.fromString(runId).toString());
-                cmd.setString(4, checkpointName);
-                cmd.setString(5, eventName);
-                if (timeout != null) cmd.setInt(6, timeout);
-                else cmd.setNull(6, Types.INTEGER);
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(taskId).toString());
+                cmd.setString(4, UUID.fromString(runId).toString());
+                cmd.setString(5, checkpointName);
+                cmd.setString(6, eventName);
+                if (timeout != null) cmd.setInt(7, timeout);
+                else cmd.setNull(7, Types.INTEGER);
 
                 try (ResultSet rs = cmd.executeQuery()) {
                     if (rs.next()) return new EventResult(rs.getBoolean(1), parseJson(rs, 2));
@@ -168,12 +177,13 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void emitEvent(String queue, String eventName, String payloadJson) {
+    public void emitEvent(String tenantId, String queue, String eventName, String payloadJson) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.emit_event ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, eventName);
-                cmd.setString(3, payloadJson);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.emit_event ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, eventName);
+                cmd.setString(4, payloadJson);
                 cmd.executeUpdate();
                 return null;
             }
@@ -181,11 +191,12 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void cancelTask(String queue, String taskId) {
+    public void cancelTask(String tenantId, String queue, String taskId) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.cancel_task ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(taskId).toString());
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.cancel_task ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(taskId).toString());
                 cmd.executeUpdate();
                 return null;
             }
@@ -193,12 +204,13 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void completeRun(String queue, String runId, String resultJson) {
+    public void completeRun(String tenantId, String queue, String runId, String resultJson) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.complete_run ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(runId).toString());
-                cmd.setString(3, resultJson);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.complete_run ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(runId).toString());
+                cmd.setString(4, resultJson);
                 cmd.executeUpdate();
                 return null;
             }
@@ -206,13 +218,14 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void failRun(String queue, String runId, String errorJson) {
+    public void failRun(String tenantId, String queue, String runId, String errorJson) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.fail_run ?, ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(runId).toString());
-                cmd.setString(3, errorJson);
-                cmd.setNull(4, Types.TIMESTAMP);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.fail_run ?, ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(runId).toString());
+                cmd.setString(4, errorJson);
+                cmd.setNull(5, Types.TIMESTAMP);
                 cmd.executeUpdate();
                 return null;
             }
@@ -220,18 +233,20 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public List<CheckpointRow> getCheckpointStates(String queue, String taskId, String runId) {
+    public List<CheckpointRow> getCheckpointStates(String tenantId, String queue, String taskId, String runId) {
         return execute(conn -> {
             List<CheckpointRow> rows = new ArrayList<>();
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.get_task_checkpoint_states ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(taskId).toString());
-                cmd.setString(3, UUID.fromString(runId).toString());
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.get_task_checkpoint_states ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(taskId).toString());
+                cmd.setString(4, UUID.fromString(runId).toString());
 
                 try (ResultSet rs = cmd.executeQuery()) {
                     while (rs.next()) {
                         Timestamp ts = rs.getTimestamp(5);
                         rows.add(new CheckpointRow(
+                                tenantId,
                                 rs.getString(1), parseJson(rs, 2), rs.getString(3),
                                 rs.getString(4), ts != null ? ts.toInstant() : null
                         ));
@@ -243,13 +258,14 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public JsonNode getSingleCheckpoint(String queue, String taskId, String checkpointName) {
+    public JsonNode getSingleCheckpoint(String tenantId, String queue, String taskId, String checkpointName) {
         return execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.get_task_checkpoint_state ?, ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(taskId).toString());
-                cmd.setString(3, checkpointName);
-                cmd.setInt(4, 0);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.get_task_checkpoint_state ?, ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(taskId).toString());
+                cmd.setString(4, checkpointName);
+                cmd.setInt(5, 0);
 
                 try (ResultSet rs = cmd.executeQuery()) {
                     if (rs.next()) return parseJson(rs, 2);
@@ -260,12 +276,13 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void scheduleRun(String queue, String runId, Instant wakeAt) {
+    public void scheduleRun(String tenantId, String queue, String runId, Instant wakeAt) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.schedule_run ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(runId).toString());
-                cmd.setTimestamp(3, Timestamp.from(wakeAt));
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.schedule_run ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(runId).toString());
+                cmd.setTimestamp(4, Timestamp.from(wakeAt));
                 cmd.executeUpdate();
                 return null;
             }
@@ -273,12 +290,13 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void heartbeat(String queue, String runId, int seconds) {
+    public void heartbeat(String tenantId, String queue, String runId, int seconds) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.extend_claim ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, UUID.fromString(runId).toString());
-                cmd.setInt(3, seconds);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.extend_claim ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, UUID.fromString(runId).toString());
+                cmd.setInt(4, seconds);
                 cmd.executeUpdate();
                 return null;
             }
@@ -286,11 +304,12 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public void releaseWorkerClaims(String queue, String workerId) {
+    public void releaseWorkerClaims(String tenantId, String queue, String workerId) {
         execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.release_worker_claims ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setString(2, workerId);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.release_worker_claims ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setString(3, workerId);
                 cmd.executeUpdate();
                 return null;
             }
@@ -298,12 +317,13 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public Integer cleanupTasks(String queue, int ttlSeconds, int limit) {
+    public Integer cleanupTasks(String tenantId, String queue, int ttlSeconds, int limit) {
         return execute(conn -> {
-            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.cleanup_tasks ?, ?, ?")) {
-                cmd.setString(1, queue);
-                cmd.setInt(2, ttlSeconds);
-                cmd.setInt(3, limit);
+            try (PreparedStatement cmd = conn.prepareStatement("EXEC ssf.cleanup_tasks ?, ?, ?, ?")) {
+                cmd.setString(1, tenantId);
+                cmd.setString(2, queue);
+                cmd.setInt(3, ttlSeconds);
+                cmd.setInt(4, limit);
                 try (ResultSet rs = cmd.executeQuery()) {
                     if (rs.next()) return rs.getInt(1);
                     return 0;
@@ -313,8 +333,8 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
     }
 
     @Override
-    public Integer cleanupEvents(String queue, int ttlSeconds, int limit) {
-        return cleanupTasks(queue, ttlSeconds, limit);
+    public Integer cleanupEvents(String tenantId, String queue, int ttlSeconds, int limit) {
+        return cleanupTasks(tenantId, queue, ttlSeconds, limit);
     }
 
     private JsonNode parseJson(ResultSet rs, int ordinal) throws SQLException {
@@ -340,7 +360,6 @@ public class SqlServerFlowDatabase implements SqlFlowDatabase {
         try (Connection conn = dataSource.getConnection()) {
             return action.execute(conn);
         } catch (SQLException ex) {
-            // T-SQL THROW uses error codes >= 50000. Check for custom Cancel error.
             if (ex.getErrorCode() == 50011) {
                 throw new CancelledTaskException();
             }
