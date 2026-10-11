@@ -8,19 +8,32 @@ The SqlFlow SDK for Java is available in the Maven Central repository.
     <dependency>
         <groupId>de.bytefish.sqlflow</groupId>
         <artifactId>sqlflow-core</artifactId>
-        <version>1.0.1</version>
+        <version>1.5.0</version>
     </dependency>
 
     <!-- SqlFlow PostgreSQL Module -->
     <dependency>
         <groupId>de.bytefish.sqlflow</groupId>
         <artifactId>sqlflow-postgres</artifactId>
-        <version>1.0.1</version>
+        <version>1.5.0</version>
+    </dependency>
+    
+    <!-- SqlFlow SQL Server Module -->
+    <dependency>
+        <groupId>de.bytefish.sqlflow</groupId>
+        <artifactId>sqlflow-sqlserver</artifactId>
+        <version>1.5.0</version>
+    </dependency>
+        
+    <!-- Optional: SqlFlow Nats Module -->
+    <dependency>
+        <groupId>de.bytefish.sqlflow</groupId>
+        <artifactId>sqlflow-nats</artifactId>
+        <version>1.5.0</version>
     </dependency>
 </dependencies>
 ```
-*Note: Use `sqlflow-sqlserver` if you prefer Microsoft SQL Server.*
-
+*Note: Only use the module for the database system you want!
 
 ## Building a Durable AI Agent
 
