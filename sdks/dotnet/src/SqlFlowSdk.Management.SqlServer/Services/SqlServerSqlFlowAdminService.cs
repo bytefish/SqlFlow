@@ -1,4 +1,6 @@
-﻿using SqlFlowSdk.Database;
+﻿// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+using SqlFlowSdk.Database;
 using SqlFlowSdk.Management.Models;
 using System.Data.Common;
 
@@ -15,99 +17,99 @@ public class SqlServerSqlFlowAdminService : ISqlFlowAdminService
         _database = database ?? throw new ArgumentNullException(nameof(database));
     }
 
-    public async Task<IEnumerable<string>> GetAllQueuesAsync(CancellationToken ct = default)
+    public async Task<IEnumerable<string>> GetAllQueuesAsync(string tenantId, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        return await _database.ListQueuesAsync(conn, ct);
+        return await _database.ListQueuesAsync(conn, tenantId, ct);
     }
 
-    public async Task CreateQueueAsync(CreateQueueCommand command, CancellationToken ct = default)
+    public async Task CreateQueueAsync(string tenantId, CreateQueueCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        await _database.CreateQueueAsync(conn, command.QueueName, ct);
+        await _database.CreateQueueAsync(conn, tenantId, command.QueueName, ct);
     }
 
-    public async Task DropQueueAsync(string queueName, CancellationToken ct = default)
+    public async Task DropQueueAsync(string tenantId, string queueName, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        await _database.DropQueueAsync(conn, queueName, ct);
+        await _database.DropQueueAsync(conn, tenantId, queueName, ct);
     }
 
-    public async Task CancelTaskAsync(CancelTaskCommand command, CancellationToken ct = default)
+    public async Task CancelTaskAsync(string tenantId, CancelTaskCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        await _database.CancelTaskAsync(conn, command.QueueName, command.TaskId, ct);
+        await _database.CancelTaskAsync(conn, tenantId, command.QueueName, command.TaskId, ct);
     }
 
-    public async Task BulkCancelTasksAsync(BulkCancelTasksCommand command, CancellationToken ct = default)
+    public async Task BulkCancelTasksAsync(string tenantId, BulkCancelTasksCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
         foreach (string taskId in command.TaskIds)
         {
-            await _database.CancelTaskAsync(conn, command.QueueName, taskId, ct);
+            await _database.CancelTaskAsync(conn, tenantId, command.QueueName, taskId, ct);
         }
     }
 
-    public async Task WakeRunAsync(ScheduleWakeupCommand command, CancellationToken ct = default)
+    public async Task WakeRunAsync(string tenantId, ScheduleWakeupCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        await _database.ScheduleRunAsync(conn, command.QueueName, command.RunId, command.WakeAt, ct);
+        await _database.ScheduleRunAsync(conn, tenantId, command.QueueName, command.RunId, command.WakeAt, ct);
     }
 
-    public async Task ForceCompleteRunAsync(CompleteRunCommand command, CancellationToken ct = default)
+    public async Task ForceCompleteRunAsync(string tenantId, CompleteRunCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        await _database.CompleteRunAsync(conn, command.QueueName, command.RunId, command.StateJson ?? "{}", ct);
+        await _database.CompleteRunAsync(conn, tenantId, command.QueueName, command.RunId, command.StateJson ?? "{}", ct);
     }
 
-    public async Task ForceFailRunAsync(FailRunCommand command, CancellationToken ct = default)
+    public async Task ForceFailRunAsync(string tenantId, FailRunCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        await _database.FailRunAsync(conn, command.QueueName, command.RunId, command.ReasonJson, ct);
+        await _database.FailRunAsync(conn, tenantId, command.QueueName, command.RunId, command.ReasonJson, ct);
     }
 
-    public async Task ExtendClaimAsync(ExtendClaimCommand command, CancellationToken ct = default)
+    public async Task ExtendClaimAsync(string tenantId, ExtendClaimCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
 
-        await _database.HeartbeatAsync(conn, command.QueueName, command.RunId, command.ExtendBySeconds, ct);
+        await _database.HeartbeatAsync(conn, tenantId, command.QueueName, command.RunId, command.ExtendBySeconds, ct);
     }
 
-    public async Task EmitEventAsync(EmitEventCommand command, CancellationToken ct = default)
+    public async Task EmitEventAsync(string tenantId, EmitEventCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
-        await _database.EmitEventAsync(conn, command.QueueName, command.EventName, command.PayloadJson ?? "null", ct);
+        await _database.EmitEventAsync(conn, tenantId, command.QueueName, command.EventName, command.PayloadJson ?? "null", ct);
     }
 
-    public async Task SetCheckpointAsync(SetCheckpointCommand command, CancellationToken ct = default)
+    public async Task SetCheckpointAsync(string tenantId, SetCheckpointCommand command, CancellationToken ct = default)
     {
         await using DbConnection conn = await _dataSource.OpenConnectionAsync(ct);
-        await _database.PersistCheckpointAsync(conn, command.QueueName, command.TaskId, command.OwnerRunId, command.StepName, command.StateJson, command.ExtendClaimBySeconds ?? 0, ct);
+        await _database.PersistCheckpointAsync(conn, tenantId, command.QueueName, command.TaskId, command.OwnerRunId, command.StepName, command.StateJson, command.ExtendClaimBySeconds ?? 0, ct);
     }
 
-    public async Task ReleaseWorkerClaimsAsync(ReleaseWorkerClaimsCommand command, CancellationToken ct = default)
+    public async Task ReleaseWorkerClaimsAsync(string tenantId, ReleaseWorkerClaimsCommand command, CancellationToken ct = default)
     {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
-        await _database.ReleaseWorkerClaimsAsync(conn, command.QueueName, command.WorkerId, ct);
+        await _database.ReleaseWorkerClaimsAsync(conn, tenantId, command.QueueName, command.WorkerId, ct);
     }
 
-    public async Task<int> CleanupTasksAsync(CleanupCommand command, CancellationToken ct = default)
+    public async Task<int> CleanupTasksAsync(string tenantId, CleanupCommand command, CancellationToken ct = default)
     {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
-        return await _database.CleanupTasksAsync(conn, command.QueueName, command.TtlSeconds, command.Limit, ct);
+        return await _database.CleanupTasksAsync(conn, tenantId, command.QueueName, command.TtlSeconds, command.Limit, ct);
     }
 
-    public async Task<int> CleanupEventsAsync(CleanupCommand command, CancellationToken ct = default)
+    public async Task<int> CleanupEventsAsync(string tenantId, CleanupCommand command, CancellationToken ct = default)
     {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
-        return await _database.CleanupEventsAsync(conn, command.QueueName, command.TtlSeconds, command.Limit, ct);
+        return await _database.CleanupEventsAsync(conn, tenantId, command.QueueName, command.TtlSeconds, command.Limit, ct);
     }
 }

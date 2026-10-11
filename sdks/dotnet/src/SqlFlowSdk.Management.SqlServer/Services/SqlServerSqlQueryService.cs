@@ -43,13 +43,14 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
     }
 
-    public async Task<List<QueueStatItem>> GetQueueStatsAsync(CancellationToken ct = default)
+    public async Task<List<QueueStatItem>> GetQueueStatsAsync(string tenantId, CancellationToken ct = default)
     {
         List<QueueStatItem> stats = [];
 
         string sql = @"
             SELECT queue_name, state, COUNT(*) as count 
             FROM ssf.tasks WITH (NOLOCK)
+            WHERE tenant_id = @tenant_id
             GROUP BY queue_name, state
             ORDER BY queue_name, state";
 
@@ -60,18 +61,19 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
+        AddParam(cmd, "@tenant_id", tenantId);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            stats.Add(new QueueStatItem(reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+            stats.Add(new QueueStatItem(tenantId, reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
         }
 
         return stats;
     }
 
-    public async Task<List<ThroughputBucketItem>> GetThroughputHistoryAsync(TimeSpan window, CancellationToken ct = default)
+    public async Task<List<ThroughputBucketItem>> GetThroughputHistoryAsync(string tenantId, TimeSpan window, CancellationToken ct = default)
     {
         List<ThroughputBucketItem> result = [];
 
@@ -82,7 +84,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
                 SUM(CASE WHEN r.state = 'failed' THEN 1 ELSE 0 END) AS failed_count,
                 ISNULL(AVG(CAST(DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS FLOAT)), 0) AS avg_duration_ms
             FROM ssf.runs r WITH (NOLOCK)
-            WHERE r.completed_at >= DATEADD(second, -@window_seconds, SYSDATETIMEOFFSET())
+            WHERE r.tenant_id = @tenant_id AND r.completed_at >= DATEADD(second, -@window_seconds, SYSDATETIMEOFFSET())
             GROUP BY DATEADD(minute, DATEDIFF(minute, 0, r.completed_at), 0), r.queue_name
             ORDER BY time_bucket DESC";
 
@@ -93,27 +95,27 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@window_seconds", (int)window.TotalSeconds);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            result.Add(new ThroughputBucketItem(reader.GetDateTimeOffset(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetDouble(4)));
+            result.Add(new ThroughputBucketItem(tenantId, reader.GetDateTimeOffset(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetDouble(4)));
         }
 
         return result;
     }
 
-    public async Task<List<TaskPercentileItem>> GetTaskLatencyPercentilesAsync(string? queueName = null, CancellationToken ct = default)
+    public async Task<List<TaskPercentileItem>> GetTaskLatencyPercentilesAsync(string tenantId, string? queueName = null, CancellationToken ct = default)
     {
         List<TaskPercentileItem> result = [];
         string sql = @"
             WITH Latencies AS (
                 SELECT t.task_name, DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS duration_ms
-                FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.task_id = r.task_id
-                WHERE r.state = 'completed' AND (@queue IS NULL OR r.queue_name = @queue)
+                FROM ssf.runs r WITH (NOLOCK) JOIN ssf.tasks t WITH (NOLOCK) ON t.tenant_id = r.tenant_id AND t.queue_name = r.queue_name AND t.task_id = r.task_id
+                WHERE r.tenant_id = @tenant_id AND r.state = 'completed' AND (@queue IS NULL OR r.queue_name = @queue)
             )
             SELECT DISTINCT task_name,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY duration_ms) OVER (PARTITION BY task_name) AS p50,
@@ -128,20 +130,20 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@queue", queueName);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            result.Add(new TaskPercentileItem(reader.GetString(0), reader.IsDBNull(1) ? 0 : Convert.ToDouble(reader.GetValue(1)), reader.IsDBNull(2) ? 0 : Convert.ToDouble(reader.GetValue(2)), reader.IsDBNull(3) ? 0 : Convert.ToDouble(reader.GetValue(3))));
+            result.Add(new TaskPercentileItem(tenantId, reader.GetString(0), reader.IsDBNull(1) ? 0 : Convert.ToDouble(reader.GetValue(1)), reader.IsDBNull(2) ? 0 : Convert.ToDouble(reader.GetValue(2)), reader.IsDBNull(3) ? 0 : Convert.ToDouble(reader.GetValue(3))));
         }
 
         return result;
     }
 
-    public async Task<DatabaseHealthItem> GetDatabaseHealthAsync(string queueName, CancellationToken ct = default)
+    public async Task<DatabaseHealthItem> GetDatabaseHealthAsync(string tenantId, string queueName, CancellationToken ct = default)
     {
         string sql = @"
             SELECT 
@@ -165,13 +167,13 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
 
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            return new DatabaseHealthItem("SQL Server", queueName, reader.IsDBNull(0) ? 0 : Convert.ToInt64(reader.GetValue(0)), reader.IsDBNull(1) ? 0 : Convert.ToInt64(reader.GetValue(1)), 0);
+            return new DatabaseHealthItem(tenantId, "SQL Server", queueName, reader.IsDBNull(0) ? 0 : Convert.ToInt64(reader.GetValue(0)), reader.IsDBNull(1) ? 0 : Convert.ToInt64(reader.GetValue(1)), 0);
         }
 
-        return new DatabaseHealthItem("SQL Server", queueName, 0, 0, 0);
+        return new DatabaseHealthItem(tenantId, "SQL Server", queueName, 0, 0, 0);
     }
 
-    public async Task<List<ActiveWorkerItem>> GetActiveWorkersAsync(CancellationToken ct = default)
+    public async Task<List<ActiveWorkerItem>> GetActiveWorkersAsync(string tenantId, CancellationToken ct = default)
     {
         List<ActiveWorkerItem> result = [];
 
@@ -183,7 +185,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
             FROM 
                 ssf.runs WITH (NOLOCK) 
             WHERE 
-                state = 'running' AND claimed_by IS NOT NULL 
+                tenant_id = @tenant_id AND state = 'running' AND claimed_by IS NOT NULL 
             GROUP BY 
                 queue_name, claimed_by 
             ORDER BY 
@@ -194,20 +196,21 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
             .ConfigureAwait(false);
 
         await using DbCommand cmd = conn.CreateCommand();
-        
+
         cmd.CommandText = sql;
-        
+        AddParam(cmd, "@tenant_id", tenantId);
+
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            result.Add(new ActiveWorkerItem(reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+            result.Add(new ActiveWorkerItem(tenantId, reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
         }
 
         return result;
     }
 
-    public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<QueueWaitTimeItem>> GetQueueWaitTimesAsync(string tenantId, int limit = 50, CancellationToken ct = default)
     {
         List<QueueWaitTimeItem> result = [];
 
@@ -219,7 +222,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
             FROM 
                 ssf.tasks WITH (NOLOCK) 
             WHERE 
-                first_started_at IS NOT NULL AND enqueue_at >= DATEADD(day, -7, SYSDATETIMEOFFSET()) 
+                tenant_id = @tenant_id AND first_started_at IS NOT NULL AND enqueue_at >= DATEADD(day, -7, SYSDATETIMEOFFSET()) 
             GROUP BY 
                 queue_name";
 
@@ -230,20 +233,20 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            result.Add(new QueueWaitTimeItem(reader.GetString(0), reader.GetDouble(1), reader.GetDouble(2)));
+            result.Add(new QueueWaitTimeItem(tenantId, reader.GetString(0), reader.GetDouble(1), reader.GetDouble(2)));
         }
 
         return result;
     }
 
-    public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(int limit = 50, TimeSpan? lookbackWindow = null, CancellationToken ct = default)
+    public async Task<List<TaskFailureHotspotItem>> GetTaskFailureHotspotsAsync(string tenantId, int limit = 50, TimeSpan? lookbackWindow = null, CancellationToken ct = default)
     {
         List<TaskFailureHotspotItem> hotspots = [];
 
@@ -255,9 +258,9 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
                 t.task_name, 
                 COUNT(*) as failure_count, MAX(r.failed_at) 
             FROM ssf.runs r WITH (NOLOCK) 
-                JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id 
+                JOIN ssf.tasks t WITH (NOLOCK) ON t.tenant_id = r.tenant_id AND r.queue_name = t.queue_name AND r.task_id = t.task_id 
             WHERE 
-                r.state = 'failed' {timeFilter} 
+                r.tenant_id = @tenant_id AND r.state = 'failed' {timeFilter} 
             GROUP BY 
                 t.queue_name, t.task_name 
             ORDER BY 
@@ -270,7 +273,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         if (lookbackWindow.HasValue)
@@ -282,13 +285,13 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            hotspots.Add(new TaskFailureHotspotItem(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetDateTimeOffset(3)));
+            hotspots.Add(new TaskFailureHotspotItem(tenantId, reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetDateTimeOffset(3)));
         }
 
         return hotspots;
     }
 
-    public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<ActiveWaitItem>> GetActiveWaitsAsync(string tenantId, int limit = 50, CancellationToken ct = default)
     {
         List<ActiveWaitItem> waits = [];
 
@@ -300,6 +303,8 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
                 MIN(created_at) 
             FROM 
                 ssf.waits WITH (NOLOCK) 
+            WHERE 
+                tenant_id = @tenant_id 
             GROUP BY 
                 queue_name, event_name 
             ORDER BY 
@@ -312,20 +317,20 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            waits.Add(new ActiveWaitItem(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetDateTimeOffset(3)));
+            waits.Add(new ActiveWaitItem(tenantId, reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetDateTimeOffset(3)));
         }
 
         return waits;
     }
 
-    public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<QueueBacklogItem>> GetQueueBacklogDepthAsync(string tenantId, int limit = 50, CancellationToken ct = default)
     {
         List<QueueBacklogItem> backlog = [];
 
@@ -337,7 +342,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
             FROM 
                 ssf.tasks WITH (NOLOCK) 
             WHERE 
-                state = 'pending' 
+                tenant_id = @tenant_id AND state = 'pending' 
             GROUP BY 
                 queue_name ORDER BY pending_count DESC";
 
@@ -348,20 +353,20 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            backlog.Add(new QueueBacklogItem(reader.GetString(0), reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetNullableDateTimeOffset(2)));
+            backlog.Add(new QueueBacklogItem(tenantId, reader.GetString(0), reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetNullableDateTimeOffset(2)));
         }
 
         return backlog;
     }
 
-    public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<RetryHotspotItem>> GetRetryHotspotsAsync(string tenantId, int limit = 50, CancellationToken ct = default)
     {
         List<RetryHotspotItem> hotspots = [];
 
@@ -375,7 +380,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
             FROM 
                 ssf.tasks WITH (NOLOCK) 
             WHERE 
-                attempts > 1 AND state IN ('pending', 'sleeping') 
+                tenant_id = @tenant_id AND attempts > 1 AND state IN ('pending', 'sleeping') 
             ORDER BY 
                 attempts DESC";
 
@@ -386,20 +391,20 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            hotspots.Add(new RetryHotspotItem(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetString(4)));
+            hotspots.Add(new RetryHotspotItem(tenantId, reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetString(4)));
         }
 
         return hotspots;
     }
 
-    public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<UpcomingWakeupBucketItem>> GetUpcomingWakeupsAsync(string tenantId, int limit = 50, CancellationToken ct = default)
     {
         List<UpcomingWakeupBucketItem> wakeups = [];
 
@@ -411,7 +416,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
             FROM 
                 ssf.runs r WITH (NOLOCK) 
             WHERE 
-                r.state = 'sleeping' AND r.available_at > SYSDATETIMEOFFSET() 
+                r.tenant_id = @tenant_id AND r.state = 'sleeping' AND r.available_at > SYSDATETIMEOFFSET() 
             GROUP BY 
                 DATEADD(hour, DATEDIFF(hour, 0, r.available_at), 0), r.queue_name 
             ORDER BY 
@@ -424,19 +429,19 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            wakeups.Add(new UpcomingWakeupBucketItem(reader.GetDateTimeOffset(0), reader.GetString(1), reader.GetInt32(2)));
+            wakeups.Add(new UpcomingWakeupBucketItem(tenantId, reader.GetDateTimeOffset(0), reader.GetString(1), reader.GetInt32(2)));
         }
 
         return wakeups;
     }
 
-    public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<SlowTaskItem>> GetSlowestTasksAsync(string tenantId, int limit = 50, CancellationToken ct = default)
     {
         List<SlowTaskItem> slowTasks = [];
 
@@ -448,9 +453,9 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
                 CAST(DATEDIFF_BIG(millisecond, r.started_at, r.completed_at) AS FLOAT) AS duration_ms, 
                 r.completed_at 
             FROM ssf.runs r WITH (NOLOCK) 
-                    JOIN ssf.tasks t WITH (NOLOCK) ON r.queue_name = t.queue_name AND r.task_id = t.task_id 
+                    JOIN ssf.tasks t WITH (NOLOCK) ON t.tenant_id = r.tenant_id AND r.queue_name = t.queue_name AND r.task_id = t.task_id 
             WHERE 
-                r.state = 'completed' AND r.completed_at >= DATEADD(day, -1, SYSDATETIMEOFFSET()) 
+                r.tenant_id = @tenant_id AND r.state = 'completed' AND r.completed_at >= DATEADD(day, -1, SYSDATETIMEOFFSET()) 
             ORDER BY 
                 duration_ms DESC";
 
@@ -461,20 +466,20 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            slowTasks.Add(new SlowTaskItem(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), reader.GetDateTimeOffset(4)));
+            slowTasks.Add(new SlowTaskItem(tenantId, reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), reader.GetDateTimeOffset(4)));
         }
 
         return slowTasks;
     }
 
-    public async Task<List<FailedTaskItem>> GetFailedTasksAsync(int limit = 50, CancellationToken ct = default)
+    public async Task<List<FailedTaskItem>> GetFailedTasksAsync(string tenantId, int limit = 50, CancellationToken ct = default)
     {
         List<FailedTaskItem> tasks = [];
 
@@ -486,9 +491,9 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
                 CAST(t.last_attempt_run AS NVARCHAR(36)), 
                 r.failed_at, r.failure_reason 
             FROM ssf.tasks t WITH (NOLOCK) 
-                LEFT JOIN ssf.runs r WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id 
+                LEFT JOIN ssf.runs r WITH (NOLOCK) ON t.tenant_id = r.tenant_id AND t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id 
             WHERE 
-                t.state = 'failed' 
+                t.tenant_id = @tenant_id AND t.state = 'failed' 
             ORDER BY 
                 r.failed_at DESC";
 
@@ -499,19 +504,19 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@limit", limit);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            tasks.Add(new FailedTaskItem(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetNullableDateTimeOffset(5), ParseJson(reader, 6)));
+            tasks.Add(new FailedTaskItem(tenantId, reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetNullableDateTimeOffset(5), ParseJson(reader, 6)));
         }
 
         return tasks;
     }
 
-    public async Task<TaskDetailItem?> GetTaskDetailsAsync(string queueName, string taskId, CancellationToken ct = default)
+    public async Task<TaskDetailItem?> GetTaskDetailsAsync(string tenantId, string queueName, string taskId, CancellationToken ct = default)
     {
         string sql = @"
             SELECT 
@@ -524,7 +529,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
             FROM 
                 ssf.tasks WITH (NOLOCK) 
             WHERE 
-                queue_name = @queue AND task_id = @task_id";
+                tenant_id = @tenant_id AND queue_name = @queue AND task_id = @task_id";
 
         await using DbConnection conn = await _dataSource
             .OpenConnectionAsync(ct)
@@ -533,7 +538,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
         await using DbCommand cmd = conn.CreateCommand();
 
         cmd.CommandText = sql;
-
+        AddParam(cmd, "@tenant_id", tenantId);
         AddParam(cmd, "@queue", queueName);
         AddParam(cmd, "@task_id", Guid.Parse(taskId));
 
@@ -541,7 +546,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
 
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            return new TaskDetailItem(taskId, queueName, reader.GetString(0), reader.GetString(1), reader.GetDateTimeOffset(2), reader.IsDBNull(3) ? null : reader.GetNullableDateTimeOffset(3), ParseJson(reader, 4), ParseJson(reader, 5));
+            return new TaskDetailItem(tenantId, taskId, queueName, reader.GetString(0), reader.GetString(1), reader.GetDateTimeOffset(2), reader.IsDBNull(3) ? null : reader.GetNullableDateTimeOffset(3), ParseJson(reader, 4), ParseJson(reader, 5));
         }
 
         return null;
@@ -562,8 +567,8 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
 
         string sql = $@"
             SELECT t.queue_name, CAST(t.task_id AS NVARCHAR(36)), t.task_name, t.state, t.attempts, CAST(t.last_attempt_run AS NVARCHAR(36)), t.enqueue_at, r.failed_at, r.failure_reason, t.params
-            FROM ssf.tasks t WITH (NOLOCK) LEFT JOIN ssf.runs r WITH (NOLOCK) ON t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id
-            WHERE t.queue_name = @queue
+            FROM ssf.tasks t WITH (NOLOCK) LEFT JOIN ssf.runs r WITH (NOLOCK) ON t.tenant_id = r.tenant_id AND t.queue_name = r.queue_name AND t.last_attempt_run = r.run_id
+            WHERE t.tenant_id = @tenant_id AND t.queue_name = @queue
               AND (@states_csv IS NULL OR t.state IN (SELECT value FROM STRING_SPLIT(@states_csv, ',')))
               AND (@min_att IS NULL OR t.attempts >= @min_att)
               AND (@max_att IS NULL OR t.attempts <= @max_att)
@@ -584,6 +589,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
 
         string? statesCsv = filter.States != null && filter.States.Count > 0 ? string.Join(",", filter.States) : null;
 
+        AddParam(cmd, "@tenant_id", filter.TenantId);
         AddParam(cmd, "@queue", filter.QueueName);
         AddParam(cmd, "@states_csv", statesCsv);
         AddParam(cmd, "@min_att", filter.MinAttempts);
@@ -599,7 +605,7 @@ public class SqlServerSqlQueryService : ISqlFlowQueryService
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            items.Add(new TaskSearchResultItem(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetDateTimeOffset(6), reader.IsDBNull(7) ? null : reader.GetNullableDateTimeOffset(7), ParseJson(reader, 8), ParseJson(reader, 9)));
+            items.Add(new TaskSearchResultItem(filter.TenantId, reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetDateTimeOffset(6), reader.IsDBNull(7) ? null : reader.GetNullableDateTimeOffset(7), ParseJson(reader, 8), ParseJson(reader, 9)));
         }
 
         return items;

@@ -27,11 +27,15 @@ builder.Services.AddSingleton<ILlmService, LlmService>();
 builder.Services.AddSingleton<IGitHubService, GitHubService>();
 builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationService>();
 
-// Configure SqlFlow: Postgres as Source of Truth, NATS as the Wake-Up Signal
+// Configure Multi-Tenant Tenant Identifier Example
+const string tenantId = "tenant-alpha";
+const string queueName = "ai-agent-queue";
+
+// Configure SqlFlow: Postgres as Source of Truth, NATS as the Wake-Up Signal with Multi-Tenancy
 builder.Services
     .AddSqlFlowPostgres(pgConnectionString)
-    .AddNatsSignaling(natsUrl) // Silently overrides Postgres LISTEN/NOTIFY
-    .AddWorker("ai-agent-queue", worker =>
+    .AddNatsSignaling(natsUrl) // Overrides standard signalling with multi-tenant NATS JetStream
+    .AddWorker(tenantId, queueName, worker =>
     {
         worker
             .SetConcurrency(1)
@@ -46,28 +50,34 @@ builder.Services
 
 var app = builder.Build();
 
-app.MapPost("/agent/start", async (
-    [FromServices] IJobPublisher jobPublisher, // <-- Inject IJobPublisher instead of ISqlFlow
+// Multi-Tenant Webhook to start an agent job
+app.MapPost("/agent/start/{tenantId}", async (
+    [FromServices] IJobPublisher jobPublisher,
+    [FromRoute] string tenantId,
     [FromBody] AgentTask task,
     CancellationToken ct) =>
 {
-    var result = await jobPublisher.PublishAsync<AutonomousAgentJob, AgentTask>("solve-bug", task, ct);
+    task.TenantId = tenantId;
 
-    return Results.Ok(new { RunId = result.RunId, TaskId = result.TaskId, Status = $"Agent dispatched to fix Issue #{task.IssueId}" });
+    var result = await jobPublisher.PublishAsync<AutonomousAgentJob, AgentTask>(tenantId, "solve-bug", task, ct);
+
+    return Results.Ok(new { TenantId = tenantId, RunId = result.RunId, TaskId = result.TaskId, Status = $"Agent dispatched for tenant {tenantId} to fix Issue #{task.IssueId}" });
 });
 
-app.MapPost("/agent/review/{issueId}/{correlationId}", async (
+// Multi-Tenant Webhook to review and resume agent workflow via NATS Event publishing
+app.MapPost("/agent/review/{tenantId}/{issueId}/{correlationId}", async (
     [FromServices] IEventPublisher publisher,
+    [FromRoute] string tenantId,
     [FromRoute] string issueId,
     [FromRoute] string correlationId,
     [FromBody] HumanApproval approval,
     CancellationToken ct) =>
 {
-    await publisher.EmitEventAsync(queue: "ai-agent-queue", eventName: $"agent-approval:{issueId}:{correlationId}", payload: approval, ct);
+    await publisher.EmitEventAsync(tenantId, queueName, eventName: $"agent-approval:{tenantId}:{issueId}:{correlationId}", payload: approval, ct);
 
     string message = approval.Approved
-        ? $"Fix for {correlationId} approved. Agent is now completing its work."
-        : $"Fix for {correlationId} rejected. Agent tries again with feedback: '{approval.Reason}'";
+        ? $"Fix for tenant {tenantId}, correlation {correlationId} approved. Agent is now completing its work."
+        : $"Fix for tenant {tenantId}, correlation {correlationId} rejected. Agent tries again with feedback: '{approval.Reason}'";
 
     return Results.Ok(new { Message = message });
 });

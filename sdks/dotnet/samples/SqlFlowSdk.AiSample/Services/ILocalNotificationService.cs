@@ -6,7 +6,7 @@ namespace SqlFlowSdk.AiSample.Services
 {
     public interface ILocalNotificationService
     {
-        Task NotifyReviewerAsync(string issueId, string correlationId, CancellationToken ct);
+        Task NotifyReviewerAsync(string tenantId, string issueId, string correlationId, CancellationToken ct);
     }
 
     public class LocalNotificationService : ILocalNotificationService
@@ -18,17 +18,17 @@ namespace SqlFlowSdk.AiSample.Services
             _logger = logger;
         }
 
-        public Task NotifyReviewerAsync(string issueId, string correlationId, CancellationToken ct)
+        public Task NotifyReviewerAsync(string tenantId, string issueId, string correlationId, CancellationToken ct)
         {
             string notification = new StringBuilder()
             .AppendLine()
             .AppendLine("======================================================")
-            .AppendLine("SqlServerFlow LLM AGENT PAUSED...")
+            .AppendLine($"MULTI-TENANT AGENT PAUSED [Tenant: {tenantId}]...")
             .AppendLine()
             .AppendLine($"The issue '{issueId}' requires human approval.")
             .AppendLine("To approve the code, execute the following request:")
             .AppendLine()
-            .AppendLine($"POST http://localhost:5000/agent/review/{issueId}/{correlationId}")
+            .AppendLine($"POST http://localhost:5000/agent/review/{tenantId}/{issueId}/{correlationId}")
             .AppendLine("Content-Type: application/json")
             .AppendLine()
             .AppendLine("{")

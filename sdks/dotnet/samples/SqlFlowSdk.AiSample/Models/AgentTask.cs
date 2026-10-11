@@ -4,8 +4,11 @@ using System.Text.Json.Serialization;
 
 namespace SqlFlowSdk.AiSample.Models;
 
-public class AgentTask 
+public class AgentTask
 {
+    [JsonPropertyName("tenant_id")]
+    public string TenantId { get; set; } = "";
+
     [JsonPropertyName("issue_id")]
-    public string IssueId { get; set; } = ""; 
+    public string IssueId { get; set; } = "";
 }

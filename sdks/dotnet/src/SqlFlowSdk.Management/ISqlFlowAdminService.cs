@@ -1,57 +1,54 @@
-﻿using SqlFlowSdk.Database;
-using SqlFlowSdk.Management.Models;
-using System.Data.Common;
+﻿using SqlFlowSdk.Management.Models;
 
 namespace SqlFlowSdk.Management;
 
 public interface ISqlFlowAdminService
 {
-        #region Queue Management
-        
-        Task<IEnumerable<string>> GetAllQueuesAsync(CancellationToken ct = default);
+    #region Queue Management
 
-        Task CreateQueueAsync(CreateQueueCommand command, CancellationToken ct = default);
+    Task<IEnumerable<string>> GetAllQueuesAsync(string tenantId, CancellationToken ct = default);
 
-        Task DropQueueAsync(string queueName, CancellationToken ct = default);
+    Task CreateQueueAsync(string tenantId, CreateQueueCommand command, CancellationToken ct = default);
 
-        #endregion
+    Task DropQueueAsync(string tenantId, string queueName, CancellationToken ct = default);
 
-        # region Task & Run Interventions
+    #endregion
 
-        Task CancelTaskAsync(CancelTaskCommand command, CancellationToken ct = default);
+    #region Task & Run Interventions
 
-        Task BulkCancelTasksAsync(BulkCancelTasksCommand command, CancellationToken ct = default);
+    Task CancelTaskAsync(string tenantId, CancelTaskCommand command, CancellationToken ct = default);
 
-        Task WakeRunAsync(ScheduleWakeupCommand command, CancellationToken ct = default);
+    Task BulkCancelTasksAsync(string tenantId, BulkCancelTasksCommand command, CancellationToken ct = default);
 
-        Task ForceCompleteRunAsync(CompleteRunCommand command, CancellationToken ct = default);
+    Task WakeRunAsync(string tenantId, ScheduleWakeupCommand command, CancellationToken ct = default);
 
-        Task ForceFailRunAsync(FailRunCommand command, CancellationToken ct = default);
+    Task ForceCompleteRunAsync(string tenantId, CompleteRunCommand command, CancellationToken ct = default);
 
-        #endregion
+    Task ForceFailRunAsync(string tenantId, FailRunCommand command, CancellationToken ct = default);
 
-        #region Worker Management
+    #endregion
 
-        Task ExtendClaimAsync(ExtendClaimCommand command, CancellationToken ct = default);
+    #region Worker Management
 
-        Task ReleaseWorkerClaimsAsync(ReleaseWorkerClaimsCommand command, CancellationToken ct = default);
+    Task ExtendClaimAsync(string tenantId, ExtendClaimCommand command, CancellationToken ct = default);
 
-        #endregion
+    Task ReleaseWorkerClaimsAsync(string tenantId, ReleaseWorkerClaimsCommand command, CancellationToken ct = default);
 
-        #region Event & Checkpoint Unblocking
+    #endregion
 
-        Task EmitEventAsync(EmitEventCommand command, CancellationToken ct = default);
+    #region Event & Checkpoint Unblocking
 
-        Task SetCheckpointAsync(SetCheckpointCommand command, CancellationToken ct = default);
+    Task EmitEventAsync(string tenantId, EmitEventCommand command, CancellationToken ct = default);
 
-        #endregion
+    Task SetCheckpointAsync(string tenantId, SetCheckpointCommand command, CancellationToken ct = default);
 
-        #region Maintenance
+    #endregion
 
-        Task<int> CleanupTasksAsync(CleanupCommand command, CancellationToken ct = default);
+    #region Maintenance
 
-        Task<int> CleanupEventsAsync(CleanupCommand command, CancellationToken ct = default);
+    Task<int> CleanupTasksAsync(string tenantId, CleanupCommand command, CancellationToken ct = default);
 
-        #endregion
+    Task<int> CleanupEventsAsync(string tenantId, CleanupCommand command, CancellationToken ct = default);
+
+    #endregion
 }
-

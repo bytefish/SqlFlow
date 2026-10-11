@@ -4,25 +4,24 @@ using System.Text;
 
 namespace SqlFlowSdk.Management.Models;
 
-public record CreateQueueCommand(string QueueName, string StorageMode = "unpartitioned");
+public record CreateQueueCommand(string TenantId, string QueueName, string StorageMode = "unpartitioned");
 
-public record CleanupCommand(string QueueName, int TtlSeconds, int Limit = 1000);
+public record CleanupCommand(string TenantId, string QueueName, int TtlSeconds, int Limit = 1000);
 
-public record EmitEventCommand(string QueueName, string EventName, string? PayloadJson = null);
+public record EmitEventCommand(string TenantId, string QueueName, string EventName, string? PayloadJson = null);
 
-public record CompleteRunCommand(string QueueName, string RunId, string? StateJson = null);
+public record CompleteRunCommand(string TenantId, string QueueName, string RunId, string? StateJson = null);
 
-public record FailRunCommand(string QueueName, string RunId, string ReasonJson, DateTimeOffset? RetryAt = null);
+public record FailRunCommand(string TenantId, string QueueName, string RunId, string ReasonJson, DateTimeOffset? RetryAt = null);
 
-public record ScheduleWakeupCommand(string QueueName, string RunId, DateTime WakeAt);
+public record ScheduleWakeupCommand(string TenantId, string QueueName, string RunId, DateTime WakeAt);
 
-public record SetCheckpointCommand(string QueueName, string TaskId, string OwnerRunId, string StepName, string StateJson, int? ExtendClaimBySeconds = null);
+public record SetCheckpointCommand(string TenantId, string QueueName, string TaskId, string OwnerRunId, string StepName, string StateJson, int? ExtendClaimBySeconds = null);
 
-public record ExtendClaimCommand(string QueueName, string RunId, int ExtendBySeconds = 30);
+public record ExtendClaimCommand(string TenantId, string QueueName, string RunId, int ExtendBySeconds = 30);
 
-public record CancelTaskCommand(string QueueName, string TaskId);
+public record CancelTaskCommand(string TenantId, string QueueName, string TaskId);
 
-public record BulkCancelTasksCommand(string QueueName, List<string> TaskIds);
+public record BulkCancelTasksCommand(string TenantId, string QueueName, List<string> TaskIds);
 
-public record ReleaseWorkerClaimsCommand(string QueueName, string WorkerId);
-
+public record ReleaseWorkerClaimsCommand(string TenantId, string QueueName, string WorkerId);
