@@ -33,7 +33,7 @@ The SqlFlow SDK for Java is available in the Maven Central repository.
     </dependency>
 </dependencies>
 ```
-*Note: Only use the module for the database system you want!
+*Note: Only use the module for the database system you want!*
 
 ## Building a Durable AI Agent
 
