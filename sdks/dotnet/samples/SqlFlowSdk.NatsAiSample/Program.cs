@@ -51,7 +51,7 @@ builder.Services
 var app = builder.Build();
 
 // Multi-Tenant Webhook to start an agent job
-app.MapPost("/agent/start/{tenantId}", async (
+app.MapPost("/agent/{tenantId}/start", async (
     [FromServices] IJobPublisher jobPublisher,
     [FromRoute] string tenantId,
     [FromBody] AgentTask task,
@@ -65,7 +65,7 @@ app.MapPost("/agent/start/{tenantId}", async (
 });
 
 // Multi-Tenant Webhook to review and resume agent workflow via NATS Event publishing
-app.MapPost("/agent/review/{tenantId}/{issueId}/{correlationId}", async (
+app.MapPost("/agent/{tenantId}/review/{issueId}/{correlationId}", async (
     [FromServices] IEventPublisher publisher,
     [FromRoute] string tenantId,
     [FromRoute] string issueId,

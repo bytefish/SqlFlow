@@ -21,19 +21,54 @@ import org.springframework.context.annotation.Configuration;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import javax.sql.DataSource;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 
 @Configuration
 public class SqlFlowConfiguration {
 
     @Bean(destroyMethod = "stop")
-    public PostgreSQLContainer<?> postgresContainer() {
+    public PostgreSQLContainer<?> postgresContainer() throws Exception {
         PostgreSQLContainer<?> postgres =
-                new PostgreSQLContainer<>("postgres:18")
-                        .withInitScript("ssf-postgres.sql");
+                new PostgreSQLContainer<>("postgres:18");
 
         postgres.start();
+
+        initializeDatabase(postgres, "../../sql/ssf-postgres-minimal.sql");
+        initializeDatabase(postgres, "../../sql/ssf-postgres-signaling.sql");
+
         return postgres;
+    }
+
+    private static void initializeDatabase(PostgreSQLContainer<?> postgres, String scriptPath) throws Exception {
+        Path sqlFilePath = Paths.get(scriptPath).normalize().toAbsolutePath();
+
+        if (!Files.exists(sqlFilePath)) {
+            throw new IllegalStateException("SQL script not found at: " + sqlFilePath);
+        }
+
+        postgres.copyFileToContainer(
+                org.testcontainers.utility.MountableFile.forHostPath(sqlFilePath),
+                "/tmp/" + scriptPath
+        );
+
+        org.testcontainers.containers.Container.ExecResult result = postgres.execInContainer(
+                "psql",
+                "-U", postgres.getUsername(),
+                "-d", postgres.getDatabaseName(),
+                "-f", "/tmp/" + scriptPath
+        );
+
+        if (result.getExitCode() != 0) {
+            throw new IllegalStateException(
+                    "SQL initialization failed:\n"
+                            + result.getStdout()
+                            + "\n"
+                            + result.getStderr()
+            );
+        }
     }
 
     @Bean
