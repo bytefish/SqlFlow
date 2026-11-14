@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<UserSecretsId>2cac1474-8b8b-4ab0-95c9-e5117001c1d1</UserSecretsId>
+	</PropertyGroup>
+
+
+	<ItemGroup>
+	  <Folder Include="sql\" />
+	</ItemGroup>
+
+	<ItemGroup>
+
+	  <Content Include="..\..\..\..\..\sql\ssf-postgres-minimal.sql" Link="sql\ssf-postgres-minimal.sql">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+
+	  <Content Include="..\sql\citus-db-sharding.sql" Link="sql\citus-db-sharding.sql">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="Npgsql" Version="10.0.3" />
+	</ItemGroup>
+
+</Project>

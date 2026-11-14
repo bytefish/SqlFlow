@@ -1,0 +1,11 @@
+<Solution>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  <Folder Name="/SqlFlowSdk/">
+    <Project Path="../../src/SqlFlowSdk.Nats/SqlFlowSdk.Nats.csproj" />
+    <Project Path="../../src/SqlFlowSdk.Postgres/SqlFlowSdk.Postgres.csproj" />
+    <Project Path="../../src/SqlFlowSdk/SqlFlowSdk.csproj" />
+  </Folder>
+  <Project Path="SqlFlowSdk.DistributedSample.AppHost/SqlFlowSdk.DistributedSample.AppHost.csproj" />
+  <Project Path="SqlFlowSdk.DistributedSample.DbDeployer/SqlFlowSdk.DistributedSample.DbDeployer.csproj" />
+  <Project Path="SqlFlowSdk.DistributedSample.WorkerApp/SqlFlowSdk.DistributedSample.WorkerApp.csproj" />
+</Solution>
