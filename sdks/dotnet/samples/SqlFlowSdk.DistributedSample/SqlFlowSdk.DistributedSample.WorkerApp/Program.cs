@@ -7,30 +7,30 @@ using SqlFlowSdk.DistributedSample.WorkerApp.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Connection Strings direkt von Aspire aus der Konfiguration/Umgebung lesen
-// (Kein DockerContainers.StartAllContainersAsync() mehr nötig!)
-string pgConnectionString = builder.Configuration.GetConnectionString("SqlFlowDb")
-    ?? throw new InvalidOperationException("Connection string 'SqlFlowDb' fehlt.");
-
-string natsUrl = builder.Configuration.GetConnectionString("nats-broker")
-    ?? throw new InvalidOperationException("Connection string 'nats-broker' fehlt.");
-
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
     .AddEnvironmentVariables();
 
+// Read connection strings from configuration (appsettings.json or environment variables)
+string pgConnectionString = builder.Configuration.GetConnectionString("SqlFlowDb")
+    ?? throw new InvalidOperationException("Connection string 'SqlFlowDb' fehlt.");
+
+// Read NATS connection string from configuration (appsettings.json or environment variables)
+string natsUrl = builder.Configuration.GetConnectionString("nats-broker")
+    ?? throw new InvalidOperationException("Connection string 'nats-broker' fehlt.");
+
 builder.Services.AddLogging(loggingBuilder => loggingBuilder.AddConsole());
 
-// 2. Sample-Services registrieren
+// Register Sample Services for LLM, GitHub, and Local Notifications
 builder.Services.AddSingleton<ILlmService, LlmService>();
 builder.Services.AddSingleton<IGitHubService, GitHubService>();
 builder.Services.AddSingleton<ILocalNotificationService, LocalNotificationService>();
 
-// Multi-Tenant Konfiguration
+// Multitenant Configuration: Each tenant has its own queue for the autonomous agent
 const string tenantId = "tenant-alpha";
 const string queueName = "ai-agent-queue";
 
-// 3. SqlFlow SDK übernimmt das komplette SQL-Locking, NATS-Signaling & Retry-Handling
+// Add SqlFlow Postgres and NATS Signaling, and configure the Worker with the AutonomousAgentJob
 builder.Services
     .AddSqlFlowPostgres(pgConnectionString)
     .AddNatsSignaling(natsUrl)
@@ -48,7 +48,7 @@ builder.Services
 
 var app = builder.Build();
 
-// 4. Deine Webhooks bleiben exakt gleich
+// API Endpoint to start the autonomous agent for a specific tenant and issue
 app.MapPost("/agent/{tenantId}/start", async (
     [FromServices] IJobPublisher jobPublisher,
     [FromRoute] string tenantId,
@@ -67,6 +67,7 @@ app.MapPost("/agent/{tenantId}/start", async (
     });
 });
 
+// API Endpoint to receive human approval or rejection for the proposed fix
 app.MapPost("/agent/{tenantId}/review/{issueId}/{correlationId}", async (
     [FromServices] IEventPublisher publisher,
     [FromRoute] string tenantId,

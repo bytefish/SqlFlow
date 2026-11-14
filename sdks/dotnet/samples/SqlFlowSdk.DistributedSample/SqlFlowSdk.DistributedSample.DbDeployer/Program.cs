@@ -13,13 +13,13 @@ string citusSqlPath = Path.Combine(AppContext.BaseDirectory, "sql", "citus-db-sh
 string baseSql = await File.ReadAllTextAsync(baseSqlPath);
 string citusSql = await File.ReadAllTextAsync(citusSqlPath);
 
-// 1. Basis-Schema anlegen
+// Create Schema, Tables, Functions, etc. 
 await ExecuteSqlAsync(connectionString, "SqlFlow-Schema (ssf-postgres-minimal.sql)", baseSql);
 
-// 2. Citus-Sharding in getrennten Einzel-Statements ausführen (vermeidet Transaktions-Block-Fehler)
+// CitusDB Sharding: Create Distributed Tables, Shards, etc.
 await ExecuteCitusShardingAsync(connectionString, "CitusDB Sharding (citus-db-sharding.sql)", citusSql);
 
-// 3. Verifizierung: Prüfen, ob Schema und Worker wirklich vorhanden sind
+// Verify that the deployment was successful and that the schema and workers are correctly set up
 await VerifyDeploymentAsync(connectionString);
 
 Console.WriteLine("=== SqlFlow DbDeployer completed successfully ===");
