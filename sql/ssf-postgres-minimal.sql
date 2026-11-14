@@ -16,7 +16,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ssf.current_time_fn()
+CREATE OR REPLACE FUNCTION now()
 RETURNS TIMESTAMPTZ
 LANGUAGE plpgsql
 AS $$
@@ -69,7 +69,7 @@ $$;
 CREATE TABLE IF NOT EXISTS ssf.queues (
     tenant_id TEXT NOT NULL,
     queue_name VARCHAR(57) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     storage_mode VARCHAR(50) NOT NULL DEFAULT 'unpartitioned' 
         CONSTRAINT chk_storage_mode CHECK (storage_mode IN ('unpartitioned', 'partitioned')),
     default_partition VARCHAR(50) NOT NULL DEFAULT 'enabled' 
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS ssf.tasks (
     retry_strategy JSONB,
     max_attempts INT,
     cancellation JSONB,
-    enqueue_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
+    enqueue_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     first_started_at TIMESTAMPTZ,
     state VARCHAR(50) NOT NULL CONSTRAINT chk_task_state CHECK (state IN ('pending', 'running', 'sleeping', 'completed', 'failed', 'cancelled')),
     attempts INT NOT NULL DEFAULT 0,
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS ssf.runs (
     failed_at TIMESTAMPTZ,
     result JSONB,
     failure_reason JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     
     PRIMARY KEY (tenant_id, queue_name, run_id)
 );
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS ssf.checkpoints (
     state JSONB,
     status VARCHAR(50) NOT NULL DEFAULT 'committed',
     owner_run_id UUID,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     
     PRIMARY KEY (tenant_id, queue_name, task_id, checkpoint_name)
 );
@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS ssf.events (
     queue_name VARCHAR(57) NOT NULL,
     event_name VARCHAR(450) NOT NULL,
     payload JSONB,
-    emitted_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
+    emitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     
     PRIMARY KEY (tenant_id, queue_name, event_name)
 );
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS ssf.waits (
     step_name VARCHAR(450) NOT NULL,
     event_name VARCHAR(450) NOT NULL,
     timeout_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT ssf.current_time_fn(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     
     PRIMARY KEY (tenant_id, queue_name, run_id, step_name)
 );
@@ -264,7 +264,7 @@ DECLARE
     v_task_id UUID := gen_random_uuid(); 
     v_run_id UUID := gen_random_uuid();
     v_attempt INT := 1;
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     
     v_headers JSONB := p_options->'headers';
     v_retry_strategy JSONB := p_options->'retry_strategy';
@@ -348,7 +348,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_claim_until TIMESTAMPTZ := v_now + (p_claim_timeout || ' seconds')::INTERVAL;
 BEGIN
     
@@ -433,7 +433,7 @@ BEGIN
     END IF;
 
     UPDATE ssf.runs 
-    SET state = 'completed', completed_at = ssf.current_time_fn(), result = p_state 
+    SET state = 'completed', completed_at = now(), result = p_state 
     WHERE tenant_id = p_tenant_id AND queue_name = p_queue_name AND run_id = p_run_id;
 
     UPDATE ssf.tasks 
@@ -455,7 +455,7 @@ CREATE OR REPLACE PROCEDURE ssf.schedule_run(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_task_id UUID;
     v_new_state VARCHAR(50);
     v_available_at TIMESTAMPTZ;
@@ -518,7 +518,7 @@ CREATE OR REPLACE PROCEDURE ssf.fail_run(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
 
     v_task_id UUID;
     v_attempt INT;
@@ -748,7 +748,7 @@ CREATE OR REPLACE PROCEDURE ssf.set_task_checkpoint_state(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_new_attempt INT;
     v_run_state VARCHAR(50);
     v_task_state VARCHAR(50);
@@ -802,7 +802,7 @@ CREATE OR REPLACE PROCEDURE ssf.extend_claim(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_run_state VARCHAR(50);
     v_claim_expires_at TIMESTAMPTZ;
     v_task_state VARCHAR(50);
@@ -915,7 +915,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_timeout_at TIMESTAMPTZ := NULL;
     v_run_state VARCHAR(50);
     v_existing_payload JSONB;
@@ -1020,7 +1020,7 @@ CREATE OR REPLACE PROCEDURE ssf.emit_event(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_payload JSONB := COALESCE(p_payload, 'null'::jsonb);
     v_emit_applied INT;
 BEGIN
@@ -1196,7 +1196,7 @@ CREATE OR REPLACE PROCEDURE ssf.cancel_task(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_task_state VARCHAR(50);
     v_dummy UUID;
 BEGIN
@@ -1242,7 +1242,7 @@ RETURNS TABLE (deleted_tasks INT)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_cutoff TIMESTAMPTZ;
     v_deleted_count INT := 0;
 BEGIN
@@ -1293,7 +1293,7 @@ RETURNS TABLE (deleted_events INT)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_now TIMESTAMPTZ := ssf.current_time_fn();
+    v_now TIMESTAMPTZ := now();
     v_cutoff TIMESTAMPTZ;
     v_deleted_count INT := 0;
 BEGIN

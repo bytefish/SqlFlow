@@ -10,16 +10,6 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<Folder Include="docker\" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<None Include="..\docker-compose.yml" Link="docker\docker-compose.yml">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</None>
-	</ItemGroup>
-
-	<ItemGroup>
 		<!-- Core host restored alongside NATS -->
 		<PackageReference Include="Aspire.Hosting.AppHost" Version="13.6.5" />
 		<PackageReference Include="Aspire.Hosting.Nats" Version="13.6.5" />

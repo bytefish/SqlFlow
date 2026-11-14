@@ -1,3 +1,21 @@
+-- Coordinator Host and Port Configuration using the Aspire configuration
+SELECT citus_set_coordinator_host('coordinator', 5432);
+
+-- Register the worker nodes with the coordinator using the resource names of the worker containers
+DO $$
+DECLARE
+    i INT;
+    worker_host TEXT;
+BEGIN
+    FOR i IN 1..10 LOOP
+        worker_host := 'worker-' || i;
+        IF NOT EXISTS (SELECT 1 FROM pg_dist_node WHERE nodename = worker_host) THEN
+            PERFORM citus_add_node(worker_host, 5432);
+        END IF;
+    END LOOP;
+END $$;
+
+-- Distribute the tables based on tenant_id across the shards
 DO $$
 BEGIN
     -- Distribute 'ssf.tasks'

@@ -19,18 +19,24 @@ var coordinator = builder.AddContainer("coordinator", "citusdata/citus", "12.1")
 // Database Deployer (declared upfront so workers can be attached directly)
 var dbDeployer = builder.AddProject<Projects.SqlFlowSdk_DistributedSample_DbDeployer>("db-deployer")
     .WithEnvironment("ConnectionStrings__SqlFlowDb", postgresConnectionString)
+    .WithEnvironment("CITUS_COORDINATOR_HOST", coordinator.Resource.Name)
     .WaitFor(coordinator);
 
 // CitusDB Worker Nodes (10 Replicas) & direct attachment to the deployer
 for (int i = 1; i <= 10; i++)
 {
     var worker = builder.AddContainer($"worker-{i}", "citusdata/citus", "12.1")
+        .WithContainerName($"sqlflow-worker-{i}")
         .WithEnvironment("POSTGRES_USER", "postgres")
         .WithEnvironment("POSTGRES_PASSWORD", "SuperStrongPassword123")
         .WithEnvironment("POSTGRES_DB", "sqlflow")
         .WithEnvironment("POSTGRES_HOST_AUTH_METHOD", "trust")
-        .WithArgs("/wait-for-manager.sh")
+        .WithEndpoint(targetPort: 5432, name: "tcp")
         .WaitFor(coordinator);
+
+    dbDeployer
+        .WithEnvironment($"CITUS_WORKER_{i}_HOST", worker.Resource.Name)
+        .WaitFor(worker);
 
     dbDeployer.WaitFor(worker);
 }
@@ -39,6 +45,7 @@ for (int i = 1; i <= 10; i++)
 builder.AddProject<Projects.SqlFlowSdk_DistributedSample_WorkerApp>("sqlflow-workers")
     .WithEnvironment("ConnectionStrings__SqlFlowDb", postgresConnectionString)
     .WithEnvironment("ConnectionStrings__nats-broker", natsConnectionString)
+    .WithHttpEndpoint(port: 5000, name: "http", isProxied: false)
     .WaitFor(nats)
     .WaitForCompletion(dbDeployer);
 
